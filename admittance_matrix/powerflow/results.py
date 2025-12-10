@@ -1,0 +1,76 @@
+"""
+Load flow and generator result classes.
+
+This module contains result data structures for:
+- Bus load flow results
+- Generator operating data and internal voltage calculations
+"""
+
+from dataclasses import dataclass
+import cmath
+import math
+
+
+@dataclass
+class BusResult:
+    """Load flow results for a busbar."""
+    name: str
+    voltage_pu: float
+    angle_deg: float
+    voltage_kv: float
+    
+    @property
+    def voltage_complex(self) -> complex:
+        """Return voltage as complex phasor (p.u.)"""
+        angle_rad = math.radians(self.angle_deg)
+        return self.voltage_pu * complex(math.cos(angle_rad), math.sin(angle_rad))
+
+
+@dataclass
+class GeneratorResult:
+    """Generator data with terminal voltage, impedance, and internal voltage."""
+    name: str
+    bus_name: str
+    voltage: complex          # Terminal voltage as complex phasor (p.u.)
+    xdss_pu: float           # Sub-transient reactance on generator base (p.u.)
+    impedance_pu: complex    # Impedance on system base (p.u.)
+    p_pu: float              # Active power on generator base (p.u.)
+    q_pu: float              # Reactive power on generator base (p.u.)
+    internal_voltage: complex # Internal voltage E' behind X''d (p.u.)
+    internal_voltage_mag: float  # |E'| magnitude (p.u.)
+    internal_voltage_angle: float  # E' angle (degrees)
+    rated_mva: float
+    rated_kv: float
+
+
+def calculate_internal_voltage(
+    terminal_voltage: complex,
+    p_pu: float,
+    q_pu: float,
+    xdss_pu: float
+) -> tuple[complex, float, float]:
+    """
+    Calculate generator internal voltage E' behind sub-transient reactance.
+    
+    E' = V + jX''d × (S*/V*)
+    
+    Args:
+        terminal_voltage: Complex terminal voltage (p.u.)
+        p_pu: Active power on generator base (p.u.)
+        q_pu: Reactive power on generator base (p.u.)
+        xdss_pu: Sub-transient reactance on generator base (p.u.)
+        
+    Returns:
+        Tuple of (E' complex, |E'|, angle in degrees)
+    """
+    if abs(terminal_voltage) == 0:
+        return complex(0, 0), 0.0, 0.0
+    
+    s_pu = complex(p_pu, q_pu)
+    z_pu = complex(0, xdss_pu)
+    
+    internal_voltage = terminal_voltage + z_pu * (s_pu.conjugate() / terminal_voltage.conjugate())
+    magnitude = abs(internal_voltage)
+    angle_deg = cmath.phase(internal_voltage) * 180 / cmath.pi
+    
+    return internal_voltage, magnitude, angle_deg
