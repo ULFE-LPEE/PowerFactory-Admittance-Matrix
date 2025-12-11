@@ -5,9 +5,44 @@ This module provides functions to run load flow calculations and
 retrieve results from PowerFactory.
 """
 
+import cmath
+
 from admittance_matrix.powerflow.extractor import get_bus_full_name
-from .results import BusResult, GeneratorResult, VoltageSourceResult, calculate_internal_voltage
+from .results import BusResult, GeneratorResult, VoltageSourceResult
 from ..core.elements import ShuntElement, GeneratorShunt, VoltageSourceShunt
+
+
+def _calculate_internal_voltage(
+    terminal_voltage: complex,
+    p_pu: float,
+    q_pu: float,
+    xdss_pu: float
+) -> tuple[complex, float, float]:
+    """
+    Calculate generator internal voltage E' behind sub-transient reactance.
+    
+    E' = V + jX''d × (S*/V*)
+    
+    Args:
+        terminal_voltage: Complex terminal voltage (p.u.)
+        p_pu: Active power on generator base (p.u.)
+        q_pu: Reactive power on generator base (p.u.)
+        xdss_pu: Sub-transient reactance on generator base (p.u.)
+        
+    Returns:
+        Tuple of (E' complex, |E'|, angle in degrees)
+    """
+    if abs(terminal_voltage) == 0:
+        return complex(0, 0), 0.0, 0.0
+    
+    s_pu = complex(p_pu, q_pu)
+    z_pu = complex(0, xdss_pu)
+    
+    internal_voltage = terminal_voltage + z_pu * (s_pu.conjugate() / terminal_voltage.conjugate())
+    magnitude = abs(internal_voltage)
+    angle_deg = cmath.phase(internal_voltage) * 180 / cmath.pi
+    
+    return internal_voltage, magnitude, angle_deg
 
 
 def run_load_flow(app) -> bool:
@@ -70,74 +105,6 @@ def get_load_flow_results(app) -> dict[str, BusResult]:
     return results
 
 
-def get_generator_data(
-    shunts: list[ShuntElement],
-    lf_results: dict[str, BusResult],
-    base_mva: float = 100.0
-) -> list[GeneratorResult]:
-    """
-    Get generator terminal voltages, impedances, and internal voltages.
-    TODO: Delete function since it is not used function!!
-    
-    Args:
-        shunts: List of shunt elements (to extract generators)
-        lf_results: Load flow results from get_load_flow_results()
-        base_mva: System base power in MVA
-        
-    Returns:
-        List of GeneratorResult objects
-    """
-    results: list[GeneratorResult] = []
-    
-    for s in shunts:
-        # Use type name check to handle autoreload issues
-        if type(s).__name__ != 'GeneratorShunt':
-            continue
-        
-        # Get terminal voltage from load flow results
-        bus_result = lf_results.get(s.bus_name)
-        if bus_result is None:
-            print(f"Warning: No load flow result for bus {s.bus_name}, skipping generator {s.name}")
-            continue
-        
-        voltage = bus_result.voltage_complex
-        
-        # Get P and Q - need to access the pf_object if available
-        # For the refactored version, we need to store these values differently
-        # This function will need the PowerFactory objects or the values passed in
-        p_pu = 0.0
-        q_pu = 0.0
-        
-        if hasattr(s, 'rated_power_mva') and s.rated_power_mva > 0:
-            z_pu_gen = complex(0, s.xdss_pu)
-            z_pu_sys = complex(0, s.xdss_pu * base_mva / s.rated_power_mva)
-        else:
-            z_pu_gen = complex(0, 0)
-            z_pu_sys = complex(0, 0)
-        
-        # Calculate internal voltage
-        internal_v, internal_v_mag, internal_v_angle = calculate_internal_voltage(
-            voltage, p_pu, q_pu, s.xdss_pu
-        )
-        
-        results.append(GeneratorResult(
-            name=s.name,
-            bus_name=s.bus_name,
-            voltage=voltage,
-            xdss_pu=s.xdss_pu,
-            impedance_pu=z_pu_sys,
-            p_pu=p_pu,
-            q_pu=q_pu,
-            internal_voltage=internal_v,
-            internal_voltage_mag=internal_v_mag,
-            internal_voltage_angle=internal_v_angle,
-            rated_mva=s.rated_power_mva,
-            rated_kv=s.rated_voltage_kv
-        ))
-    
-    return results
-
-
 def get_generator_data_from_pf(
     app,
     shunts: list[ShuntElement],
@@ -195,7 +162,7 @@ def get_generator_data_from_pf(
             q_pu = 0.0
             z_pu_sys = complex(0, 0)
         
-        internal_v, internal_v_mag, internal_v_angle = calculate_internal_voltage(
+        internal_v, internal_v_mag, internal_v_angle = _calculate_internal_voltage(
             voltage, p_pu, q_pu, s.xdss_pu
         )
         

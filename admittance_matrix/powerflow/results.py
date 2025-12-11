@@ -56,36 +56,3 @@ class VoltageSourceResult:
     internal_voltage_mag: float  # |E| magnitude (p.u.)
     internal_voltage_angle: float  # E angle (degrees)
     source_type: str = 'voltage_source'  # Source type identifier
-
-
-def calculate_internal_voltage(
-    terminal_voltage: complex,
-    p_pu: float,
-    q_pu: float,
-    xdss_pu: float
-) -> tuple[complex, float, float]:
-    """
-    Calculate generator internal voltage E' behind sub-transient reactance.
-    
-    E' = V + jX''d × (S*/V*)
-    
-    Args:
-        terminal_voltage: Complex terminal voltage (p.u.)
-        p_pu: Active power on generator base (p.u.)
-        q_pu: Reactive power on generator base (p.u.)
-        xdss_pu: Sub-transient reactance on generator base (p.u.)
-        
-    Returns:
-        Tuple of (E' complex, |E'|, angle in degrees)
-    """
-    if abs(terminal_voltage) == 0:
-        return complex(0, 0), 0.0, 0.0
-    
-    s_pu = complex(p_pu, q_pu)
-    z_pu = complex(0, xdss_pu)
-    
-    internal_voltage = terminal_voltage + z_pu * (s_pu.conjugate() / terminal_voltage.conjugate())
-    magnitude = abs(internal_voltage)
-    angle_deg = cmath.phase(internal_voltage) * 180 / cmath.pi
-    
-    return internal_voltage, magnitude, angle_deg
