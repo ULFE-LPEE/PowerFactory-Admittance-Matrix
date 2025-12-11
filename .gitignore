@@ -20,3 +20,5 @@ ipython_config.py
 
 # RMS results files
 rms_results/*
+
+martin_ees_dev/*
