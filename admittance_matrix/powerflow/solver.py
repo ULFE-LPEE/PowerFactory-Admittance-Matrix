@@ -5,8 +5,9 @@ This module provides functions to run load flow calculations and
 retrieve results from PowerFactory.
 """
 
-from .results import BusResult, GeneratorResult, calculate_internal_voltage
-from ..core.elements import ShuntElement, GeneratorShunt
+from admittance_matrix.powerflow.extractor import get_bus_full_name
+from .results import BusResult, GeneratorResult, VoltageSourceResult, calculate_internal_voltage
+from ..core.elements import ShuntElement, GeneratorShunt, VoltageSourceShunt
 
 
 def run_load_flow(app) -> bool:
@@ -46,12 +47,21 @@ def get_load_flow_results(app) -> dict[str, BusResult]:
         if bus.outserv == 1:
             continue
         
-        v_pu = bus.GetAttribute("m:u")      # Voltage magnitude in p.u.
-        angle = bus.GetAttribute("m:phiu")  # Voltage angle in degrees
+        try:
+            v_pu = bus.GetAttribute("m:u")      # Voltage magnitude in p.u.
+            angle = bus.GetAttribute("m:phiu")  # Voltage angle in degrees
+        except Exception as e:
+            print(f"Warning: Failed to get load flow results for bus {bus.loc_name}: {e}")
+            continue
+        
+        if v_pu is None or angle is None:
+            print(f"Warning: Load flow results not available for bus {bus.loc_name}")
+            continue
+        
         v_kv = bus.uknom * v_pu             # Voltage in kV
         
-        results[bus.loc_name] = BusResult(
-            name=bus.loc_name,
+        results[get_bus_full_name(bus)] = BusResult(
+            name=get_bus_full_name(bus),
             voltage_pu=v_pu,
             angle_deg=angle,
             voltage_kv=v_kv
@@ -67,6 +77,7 @@ def get_generator_data(
 ) -> list[GeneratorResult]:
     """
     Get generator terminal voltages, impedances, and internal voltages.
+    TODO: Delete function since it is not used function!!
     
     Args:
         shunts: List of shunt elements (to extract generators)
@@ -152,6 +163,8 @@ def get_generator_data_from_pf(
     # Get all generators from PowerFactory
     pf_gens = app.GetCalcRelevantObjects("*.ElmSym", 0, 0, 0)
     gen_pf_map = {gen.loc_name: gen for gen in pf_gens}
+
+    print(len(pf_gens))
     
     for s in shunts:
         if type(s).__name__ != 'GeneratorShunt':
@@ -159,6 +172,7 @@ def get_generator_data_from_pf(
         
         bus_result = lf_results.get(s.bus_name)
         if bus_result is None:
+            print(f"Warning: No load flow result for bus {s.bus_name}, skipping generator {s.name}")
             continue
         
         voltage = bus_result.voltage_complex
@@ -185,6 +199,15 @@ def get_generator_data_from_pf(
             voltage, p_pu, q_pu, s.xdss_pu
         )
         
+        # Get zone from cpZone attribute
+        zone_name = 'Unknown'
+        try:
+            zone_obj = pf_gen.GetAttribute('cpZone')
+            if zone_obj is not None:
+                zone_name = zone_obj.loc_name
+        except Exception:
+            pass
+        
         results.append(GeneratorResult(
             name=s.name,
             bus_name=s.bus_name,
@@ -197,7 +220,90 @@ def get_generator_data_from_pf(
             internal_voltage_mag=internal_v_mag,
             internal_voltage_angle=internal_v_angle,
             rated_mva=s.rated_power_mva,
-            rated_kv=s.rated_voltage_kv
+            rated_kv=s.rated_voltage_kv,
+            zone=zone_name
         ))
     
+    print("Number of generators extracted:", len(results))
+    return results
+
+
+def get_voltage_source_data_from_pf(
+    app,
+    shunts: list[ShuntElement],
+    lf_results: dict[str, BusResult],
+    base_mva: float = 100.0
+) -> list[VoltageSourceResult]:
+    """
+    Get voltage source data including internal voltage from PowerFactory load flow results.
+    
+    For voltage sources, the internal voltage is calculated similarly to generators:
+    E = V + Z × I, where I = (S*/V*)
+    
+    Args:
+        app: PowerFactory application instance
+        shunts: List of shunt elements (to extract voltage sources)
+        lf_results: Load flow results from get_load_flow_results()
+        base_mva: System base power in MVA
+        
+    Returns:
+        List of VoltageSourceResult objects
+    """
+    import cmath
+    
+    results: list[VoltageSourceResult] = []
+    
+    # Get all AC voltage sources from PowerFactory
+    pf_vacs = app.GetCalcRelevantObjects("*.ElmVac", 0, 0, 0)
+    vac_pf_map = {vac.loc_name: vac for vac in pf_vacs}
+    
+    for s in shunts:
+        if not isinstance(s, VoltageSourceShunt):
+            continue
+        
+        bus_result = lf_results.get(s.bus_name)
+        if bus_result is None:
+            print(f"Warning: No load flow result for bus {s.bus_name}, skipping voltage source {s.name}")
+            continue
+        
+        voltage = bus_result.voltage_complex
+        
+        # Get PowerFactory object for this voltage source
+        pf_vac = vac_pf_map.get(s.name)
+        if pf_vac is None:
+            print(f"Warning: PowerFactory object not found for voltage source {s.name}")
+            continue
+        
+        # Get P and Q from load flow results
+        p_mw = pf_vac.GetAttribute("m:P:bus1") or 0.0
+        q_mvar = pf_vac.GetAttribute("m:Q:bus1") or 0.0
+        
+        # Calculate impedance on system base
+        z_base = (s.voltage_kv ** 2) / base_mva
+        z_ohm = complex(s.resistance_ohm, s.reactance_ohm)
+        z_pu_sys = z_ohm / z_base if z_base > 0 else complex(0, 0)
+        
+        # Calculate internal voltage: E = V + Z × (S*/V*)
+        if abs(voltage) > 0 and abs(z_pu_sys) > 0:
+            s_pu = complex(p_mw / base_mva, q_mvar / base_mva)
+            i_pu = (s_pu.conjugate() / voltage.conjugate())
+            internal_v = voltage + z_pu_sys * i_pu
+        else:
+            # If no impedance, internal voltage = terminal voltage
+            internal_v = voltage
+        
+        internal_v_mag = abs(internal_v)
+        internal_v_angle = cmath.phase(internal_v) * 180 / cmath.pi
+        
+        results.append(VoltageSourceResult(
+            name=s.name,
+            bus_name=s.bus_name,
+            voltage=voltage,
+            impedance_pu=z_pu_sys,
+            internal_voltage=internal_v,
+            internal_voltage_mag=internal_v_mag,
+            internal_voltage_angle=internal_v_angle
+        ))
+    
+    print("Number of voltage sources extracted:", len(results))
     return results
