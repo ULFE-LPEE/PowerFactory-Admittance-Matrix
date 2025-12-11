@@ -41,6 +41,21 @@ class GeneratorResult:
     internal_voltage_angle: float  # E' angle (degrees)
     rated_mva: float
     rated_kv: float
+    zone: str = 'Unknown'     # Zone name from cpZone attribute
+    source_type: str = 'generator'  # Source type identifier
+
+
+@dataclass
+class VoltageSourceResult:
+    """Voltage source data with terminal voltage and internal voltage."""
+    name: str
+    bus_name: str
+    voltage: complex          # Terminal voltage as complex phasor (p.u.)
+    impedance_pu: complex     # Internal impedance on system base (p.u.)
+    internal_voltage: complex # Internal voltage (behind impedance)
+    internal_voltage_mag: float  # |E| magnitude (p.u.)
+    internal_voltage_angle: float  # E angle (degrees)
+    source_type: str = 'voltage_source'  # Source type identifier
 
 
 def calculate_internal_voltage(

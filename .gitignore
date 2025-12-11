@@ -17,3 +17,6 @@ ipython_config.py
 # VS Code
 .vscode/
 *.code-workspace
+
+# RMS results files
+rms_results/*

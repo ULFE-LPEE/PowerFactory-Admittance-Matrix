@@ -57,9 +57,12 @@ from .core import (
     LineBranch,
     SwitchBranch,
     TransformerBranch,
+    Transformer3WBranch,
     ShuntElement,
     LoadShunt,
     GeneratorShunt,
+    ExternalGridShunt,
+    VoltageSourceShunt,
 )
 
 # Matrix functions
@@ -77,12 +80,14 @@ from .matrices import (
 from .powerflow import (
     BusResult,
     GeneratorResult,
+    VoltageSourceResult,
     calculate_internal_voltage,
     get_network_elements,
     run_load_flow,
     get_load_flow_results,
     get_generator_data,
     get_generator_data_from_pf,
+    get_voltage_source_data_from_pf,
 )
 
 # Utilities
@@ -100,9 +105,12 @@ __all__ = [
     'LineBranch',
     'SwitchBranch',
     'TransformerBranch',
+    'Transformer3WBranch',
     'ShuntElement',
     'LoadShunt',
     'GeneratorShunt',
+    'ExternalGridShunt',
+    'VoltageSourceShunt',
     
     # Matrix types and functions
     'MatrixType',
@@ -116,6 +124,7 @@ __all__ = [
     # Result classes
     'BusResult',
     'GeneratorResult',
+    'VoltageSourceResult',
     'calculate_internal_voltage',
     
     # PowerFactory functions
@@ -124,5 +133,6 @@ __all__ = [
     'get_load_flow_results',
     'get_generator_data',
     'get_generator_data_from_pf',
+    'get_voltage_source_data_from_pf',
     'init_project',
 ]

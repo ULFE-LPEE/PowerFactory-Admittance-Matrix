@@ -7,7 +7,7 @@ This module provides functions for building Y-matrices from network elements.
 import numpy as np
 from enum import Enum
 
-from ..core.elements import BranchElement, ShuntElement, GeneratorShunt, LoadShunt
+from ..core.elements import BranchElement, ShuntElement, GeneratorShunt, LoadShunt, Transformer3WBranch
 
 
 class MatrixType(Enum):
@@ -19,9 +19,10 @@ class MatrixType(Enum):
 
 def get_unique_buses(
     branches: list[BranchElement], 
-    shunts: list[ShuntElement]
+    shunts: list[ShuntElement],
+    transformers_3w: list[Transformer3WBranch] | None = None
 ) -> list[str]:
-    """Extract unique bus names from branches and shunts."""
+    """Extract unique bus names from branches, shunts, and 3-winding transformers."""
     buses = set()
     
     for b in branches:
@@ -31,6 +32,13 @@ def get_unique_buses(
     for s in shunts:
         buses.add(s.bus_name)
     
+    # Add 3-winding transformer buses (HV, MV, LV - no virtual star node needed)
+    if transformers_3w:
+        for t3w in transformers_3w:
+            buses.add(t3w.hv_bus_name)
+            buses.add(t3w.mv_bus_name)
+            buses.add(t3w.lv_bus_name)
+    
     return sorted(list(buses))
 
 
@@ -39,17 +47,19 @@ def build_admittance_matrix(
     shunts: list[ShuntElement],
     bus_names: list[str],
     matrix_type: MatrixType = MatrixType.LOAD_FLOW,
-    base_mva: float = 100.0
+    base_mva: float = 100.0,
+    transformers_3w: list[Transformer3WBranch] | None = None
 ) -> tuple[np.ndarray, dict[str, int]]:
     """
     Build the admittance (Y) matrix from branch and shunt elements.
     
     Args:
-        branches: List of branch elements (lines, switches)
+        branches: List of branch elements (lines, switches, 2W transformers)
         shunts: List of shunt elements (generators, loads)
-        bus_names: List of unique bus names
+        bus_names: List of unique bus names (including virtual star nodes for 3W trafos)
         matrix_type: Type of matrix to build
         base_mva: System base power in MVA (default 100 MVA)
+        transformers_3w: List of 3-winding transformers (optional)
         
     Returns:
         Tuple of (Y_matrix, bus_index_map)
@@ -73,6 +83,18 @@ def build_admittance_matrix(
         Y[j, j] += Yjj
         Y[i, j] += Yij
         Y[j, i] += Yji
+    
+    # Process 3-winding transformers
+    if transformers_3w:
+        for t3w in transformers_3w:
+            contributions = t3w.get_y_matrix_contributions(base_mva)
+            for (bus_from, bus_to), (Yii, Yjj, Yij, Yji) in contributions.items():
+                i = bus_idx[bus_from]
+                j = bus_idx[bus_to]
+                Y[i, i] += Yii
+                Y[j, j] += Yjj
+                Y[i, j] += Yij
+                Y[j, i] += Yji
     
     # Process shunt elements (add to diagonal)
     if matrix_type == MatrixType.STABILITY:

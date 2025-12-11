@@ -1,7 +1,13 @@
 """
 Utility functions for PowerFactory operations.
 """
-
+from typing import Optional, List
+import numpy as np
+import pandas as pd
+import os
+import time
+import powerfactory as pf
+from powerfactory import DataObject
 
 def init_project(app, project_path: str) -> bool:
     """
@@ -16,3 +22,226 @@ def init_project(app, project_path: str) -> bool:
     """
     err = app.ActivateProject(project_path)
     return err == 0
+
+def get_simulation_data(GEN_OUT: str, path: str, available_measurements: Optional[List[str]] = None, pfResultsName: str = "All calculations") -> tuple:
+    """
+    Extract simulation data and optionally filter to available measurements.
+    
+    Parameters:
+    -----------
+    GEN_OUT : str
+        Name of the generator that experienced the outage
+    path : str
+        Path to the CSV file with simulation results
+    available_measurements : list of str, optional
+        List of generator NAMES that have available measurements.
+        If None, all generators are included.
+    
+    Returns:
+    --------
+    tuple: (rdP, generator_name_order, data)
+        rdP: Power redistribution percentages
+        generator_name_order: List of generator names in order
+        data: Full DataFrame
+    """
+    file_path = path
+    data = pd.read_csv(file_path, delimiter=';', decimal=',', skiprows=0) # Read the CSV file
+    # Remove the second 1st row from data (parameter description)
+    data = data.drop(index=0)
+
+    # Convert Time column to numeric 
+    data[f'{pfResultsName}'] = data[f'{pfResultsName}'].str.replace(',', '.').astype(float)
+
+    # Convert all other columns to numeric
+    for col in data.columns[1:]:
+        data[col] = data[col].str.replace(',', '.').astype(float)
+
+    # Find the index of the first row where GEN_OUT hits its minimum value
+    min_index = int(data[GEN_OUT].idxmin())
+    min_index = 32 # We know the index from the simulation (as the min index is not always the first one)
+    
+    # Get values from all columns except the first column at the minimum index
+    values_at_min_index = data.iloc[min_index - 1, 1:].values
+
+    # Get values from all columns except the first column at the index before the minimum index
+    values_before_min_index = data.iloc[min_index - 2, 1:].values
+
+    substraction = np.array(values_at_min_index) - np.array(values_before_min_index)
+    
+    # Get the index of generator that was disturbed
+    gen_out_index = data.columns.get_loc(GEN_OUT)
+    substraction[gen_out_index - 1] = 0 # type: ignore
+
+    # Create generator name order list (all generators from CSV)
+    generator_name_order = data.columns[1:].tolist()
+    
+    # Filter to only available measurements if specified
+    if available_measurements is not None:
+        # Create boolean mask for available generators
+        mask = [gen in available_measurements for gen in generator_name_order]
+        
+        # Filter substraction values and generator names
+        substraction = substraction[mask]
+        generator_name_order = [gen for gen in generator_name_order if gen in available_measurements]
+    
+    # print(sum(substraction)) #! Dev
+    rdP = substraction / sum(substraction)
+    # print("Sum of substraction:", sum(substraction)) #! Dev
+
+    return rdP, generator_name_order, data
+
+def obtain_rms_results(app: pf.Application, filesPath: str, pfResultsName: str = "All calculations") -> None:
+    # Get the ElmRes object
+    elmRes = app.GetCalcRelevantObjects(f"*{pfResultsName}.ElmRes")[0]
+    # elmRes = app.GetCalcRelevantObjects("*I.ElmRes")[0]
+    print("Ime Rezultatov: ", elmRes.GetAttribute("loc_name"))
+    
+    # Get all generators
+    all_generators = app.GetCalcRelevantObjects("*.ElmSym", 1, 1, 1)
+    print("All generators: ", len(all_generators))
+    generators: List[DataObject] = []
+    for gen in all_generators:
+        if gen.GetAttribute("outserv") == 1:
+            continue
+        if gen.IsEnergized() != 1:
+            continue
+        generators.append(gen)
+    print("Generators: ", len(generators))
+    print("Generators: ", [gen.GetAttribute("loc_name") for gen in generators])
+
+    # Get all voltage sources (ElmVac) - these will be monitored but not tripped
+    all_voltage_sources = app.GetCalcRelevantObjects("*.ElmVac", 1, 1, 1)
+    print("All voltage sources: ", len(all_voltage_sources))
+    voltage_sources: List[DataObject] = []
+    for vac in all_voltage_sources:
+        if vac.GetAttribute("outserv") == 1:
+            continue
+        if vac.IsEnergized() != 1:
+            continue
+        voltage_sources.append(vac)
+    print("Voltage sources: ", len(voltage_sources))
+    print("Voltage sources: ", [vac.GetAttribute("loc_name") for vac in voltage_sources])
+
+    # Setup monitoring for generators
+    for gen in generators:
+        obj = elmRes.CreateObject("IntMon")
+        obj.SetAttribute("loc_name", gen.GetAttribute("loc_name"))
+        obj.SetAttribute("obj_id", gen)
+        selected_variables = ["s:P1"]
+        obj.SetAttribute("vars", selected_variables)
+
+    # Setup monitoring for voltage sources
+    for vac in voltage_sources:
+        obj = elmRes.CreateObject("IntMon")
+        obj.SetAttribute("loc_name", vac.GetAttribute("loc_name"))
+        obj.SetAttribute("obj_id", vac)
+        selected_variables = ["m:P:bus1"]  # Active power output
+        obj.SetAttribute("vars", selected_variables)
+
+    # DISABLE ALL CURRENT SIMULATION EVENTS (set as out of service)
+    active = app.GetActiveStudyCase()
+    eventFolder: DataObject = next((con for con in active.GetContents() if con.loc_name == "Simulation Events/Fault"))
+    simulation_events: List[DataObject] = eventFolder.GetContents()
+    for event in simulation_events:
+        event.SetAttribute("outserv", 1)
+
+    iteration = 0
+    created_events = []
+    previous_event = None
+    files_names = []
+
+    # Only create switch events for generators (not voltage sources)
+    for gen in generators:
+        # if (gen.GetAttribute("loc_name") != "Mar. Otok Gen1"):
+        #     continue
+        iteration += 1
+
+        gen_name = gen.GetAttribute("loc_name")
+        print(f"Processing generator outage for generator nr. {iteration}: {gen_name}")
+
+        # ====== 1. We define the SwitchEvent (only for generators)
+        new_event = eventFolder.CreateObject("EvtSwitch")
+        new_event.SetAttribute("loc_name", gen_name+"_izpad")
+        new_event.SetAttribute("p_target", gen)
+        new_event.SetAttribute("time", 0.3)
+        created_events.append(new_event)
+
+        # ====== 2. We run the simulation
+        # Calculate initial conditions
+        oInit = app.GetFromStudyCase('ComInc')  # Get initial condition calculation object
+        timeUnit = oInit.GetAttributeUnit("dtgrd") # Set to calculate initial conditions
+        if timeUnit == "s": # If not in ms
+            oInit.SetAttribute("dtgrd", 0.01) # Set to 10 ms
+        if timeUnit == "ms": # If not in ms
+            oInit.SetAttribute("dtgrd", 10) # Set sim step to 10 ms
+        # oInit.SetAttribute("dtgrd", 1) # Set sim step to 1 ms
+        oInit.SetAttribute("tstart", 0) # Set sim start time to 0 ms
+        oInit.Execute() # type: ignore
+
+        # Run RMS-simulation
+        oRms = app.GetFromStudyCase('ComSim')   # Get RMS-simulation object
+        oRms.SetAttribute("tstop", 0.35)  # Set simulation time to 0.5 seconds
+        oRms.Execute() # type: ignore
+
+        # ====== 3. We delete the current event if it exists
+        if previous_event is not None:
+            deleted = previous_event.Delete()
+            if deleted == 0:
+                pass
+            else:
+                print("Failed to delete event: ", previous_event.GetAttribute("loc_name"))
+        new_event.SetAttribute("outserv", 1)
+
+        # ====== 4. We get the results
+        comRes = app.GetFromStudyCase("ComRes")
+        comRes.pResult = elmRes         # Set ElmRes object to export from # type: ignore
+        comRes.iopt_exp = 6             # Set export to csv - 6 # type: ignore
+        comRes.iopt_sep = 0             # Set use the system seperator # type: ignore
+        comRes.iopt_honly = 0           # To export data and not only the head er # type:ignore
+        comRes.iopt_csel = 1            # Set export to only selected variables # type: ignore
+        comRes.numberPrecisionFixed = 8 # Set the number precision to 6 decimals # type: ignore
+        comRes.col_Sep = ";"            # Set the column separator to ; # type: ignore
+        comRes.dec_Sep = ","            # Set the decimal separator to , # type: ignore
+
+        # Set File path and name 
+        file_name = "results_izpad_" + gen_name + ".csv"
+        files_names.append(file_name)
+        results_folder = filesPath
+        if not os.path.exists(results_folder):
+            os.makedirs(results_folder)
+        file_path = os.path.join(results_folder, file_name)
+        comRes.f_name = file_path # type: ignore
+
+        resultObject = [None] # type: ignore
+        elements = [elmRes] # type: ignore
+        variable = ["b:tnow"] # type: ignore
+
+        # Add generators to export
+        for g in generators:
+            resultObject.append(None)
+            elements.append(g)
+            variable.append("s:P1")
+        
+        # Add voltage sources to export
+        for vac in voltage_sources:
+            resultObject.append(None)
+            elements.append(vac)
+            variable.append("m:P:bus1")
+        
+        # Set the selected variables
+        comRes.resultobj = resultObject # Export selected # type: ignore
+        comRes.element = elements # type: ignore
+        comRes.variable = variable # type: ignore
+
+        # Export the results
+        comRes.Execute() # type: ignore 
+
+        # Await for the file to be accessible
+        while not os.path.exists(file_path):
+            time.sleep(0.1)
+
+        # ====== 5. We disable the SwitchEvent (set to out of service here as cannot delete, will be deleted in the next iteration)
+        new_event.SetAttribute("outserv", 1)
+        previous_event = new_event
+
+        app.ClearOutputWindow()

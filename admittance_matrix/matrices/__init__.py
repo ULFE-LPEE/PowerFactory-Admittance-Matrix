@@ -18,6 +18,17 @@ from .analysis import (
     calculate_power_distribution_ratios,
 )
 
+from .diagnostics import (
+    find_connected_components,
+    find_isolated_buses,
+    find_zero_rows_cols,
+    check_matrix_health,
+    find_ungrounded_buses,
+    validate_generator_buses,
+    diagnose_network,
+    print_diagnostics,
+)
+
 __all__ = [
     'MatrixType',
     'build_admittance_matrix',
@@ -26,4 +37,13 @@ __all__ = [
     'kron_reduction',
     'reduce_to_generator_internal_buses',
     'calculate_power_distribution_ratios',
+    # Diagnostics
+    'find_connected_components',
+    'find_isolated_buses',
+    'find_zero_rows_cols',
+    'check_matrix_health',
+    'find_ungrounded_buses',
+    'validate_generator_buses',
+    'diagnose_network',
+    'print_diagnostics',
 ]

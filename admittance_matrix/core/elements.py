@@ -54,16 +54,20 @@ class LineBranch(BranchElement):
     resistance_ohm: float = 0.0
     reactance_ohm: float = 0.0
     susceptance_us: float = 0.0  # Total susceptance in µS
+    n_parallel: int = 1  # Number of parallel systems (nlnum in PowerFactory)
     
     def __post_init__(self):
-        # Calculate series admittance
+        # Calculate series admittance for a single line
         if self.resistance_ohm == 0 and self.reactance_ohm == 0:
-            self.admittance = complex(0, 0)
+            single_admittance = complex(0, 0)
         else:
-            self.admittance = 1 / complex(self.resistance_ohm, self.reactance_ohm)
+            single_admittance = 1 / complex(self.resistance_ohm, self.reactance_ohm)
         
-        # Calculate shunt admittance (B/2 at each end)
-        self.shunt_admittance = complex(0, self.susceptance_us * 1e-6 / 2)
+        # Multiply by number of parallel systems (parallel admittances add up)
+        self.admittance = single_admittance * self.n_parallel
+        
+        # Calculate shunt admittance (B/2 at each end), also scaled by n_parallel
+        self.shunt_admittance = complex(0, self.susceptance_us * 1e-6 / 2) * self.n_parallel
     
     def get_y_matrix_entries(self, base_mva: float | None = None) -> tuple[complex, complex, complex, complex]:
         """Include shunt admittance (pi-model)"""
@@ -101,6 +105,7 @@ class TransformerBranch(BranchElement):
     - Series impedance (R + jX) on transformer base
     - Tap ratio (t) - ratio of actual voltage to nominal voltage on HV side
     - Magnetizing admittance (optional)
+    - Number of parallel transformers (ntnum)
     
     Y-matrix for transformer between buses i (HV) and j (LV):
         Y_ii = y / t²
@@ -117,20 +122,25 @@ class TransformerBranch(BranchElement):
     tap_ratio: float = 1.0      # Tap ratio (actual/nominal on HV side)
     tap_side: int = 0           # 0 = HV side, 1 = LV side
     magnetizing_admittance: complex = field(default=complex(0, 0))  # Y_m in p.u.
+    n_parallel: int = 1  # Number of parallel transformers (ntnum in PowerFactory)
     
     def __post_init__(self):
-        # Calculate series admittance in per-unit on transformer base
+        # Calculate series admittance in per-unit on transformer base for single transformer
         if self.resistance_pu == 0 and self.reactance_pu == 0:
-            self.admittance = complex(0, 0)
+            single_admittance = complex(0, 0)
         else:
             z_pu_trafo = complex(self.resistance_pu, self.reactance_pu)
-            self.admittance = 1 / z_pu_trafo  # Y in p.u. on transformer base
+            single_admittance = 1 / z_pu_trafo  # Y in p.u. on transformer base
+        
+        # Multiply by number of parallel transformers (parallel admittances add up)
+        self.admittance = single_admittance * self.n_parallel
     
     def get_admittance_pu(self, base_mva: float = 100.0) -> complex:
         """
         Get series admittance in per-unit on system base.
         
         Conversion: Y_sys = Y_trafo * (S_trafo / S_sys)
+        Note: rated_power_mva is for a single transformer, n_parallel already applied to admittance
         """
         if self.rated_power_mva > 0:
             return self.admittance * (self.rated_power_mva / base_mva)
@@ -166,8 +176,159 @@ class TransformerBranch(BranchElement):
 
 
 @dataclass
+class Transformer3WBranch:
+    """
+    Three-winding transformer element.
+    
+    Uses PowerFactory's GetZpu() method to retrieve pair impedances directly
+    and builds a 3×3 nodal admittance matrix (HV, MV, LV order).
+    
+    The pair impedances are:
+    - Z_HM (pair 0): HV-MV impedance (LV open)
+    - Z_ML (pair 1): MV-LV impedance (HV open)  
+    - Z_LH (pair 2): LV-HV impedance (MV open)
+    
+    Local node order: [HV, MV, LV]
+    """
+    pf_object: pf.DataObject  # ElmTr3
+    name: str
+    hv_bus_name: str
+    mv_bus_name: str
+    lv_bus_name: str
+    base_mva: float = 100.0  # System base MVA
+    n_parallel: int = 1  # Number of parallel transformers
+    
+    # Optional: store rated values for reference
+    rated_power_mva: float = 0.0
+    hv_kv: float = 0.0
+    mv_kv: float = 0.0
+    lv_kv: float = 0.0
+    
+    def _get_tap_z_dependent_side(self) -> int:
+        """
+        Side whose tap affects the impedance (0=HV, 1=MV, 2=LV, or -1 if none).
+        """
+        return self.pf_object.GetTapZDependentSide()
+    
+    def _get_tap_position_for_Z(self) -> int:
+        """
+        Tap position to use in GetZpu: tap of the Z-dependent side.
+        If none is defined, fall back to HV side tap (0).
+        """
+        z_side = self._get_tap_z_dependent_side()
+        if z_side < 0:
+            z_side = 0  # fallback: HV side
+        return self.pf_object.NTap(z_side)
+    
+    def _get_Z_pair(self, pair_index: int) -> complex:
+        """
+        Get pair impedance in pu on SYSTEM base between:
+            pair_index = 0 → HV-MV
+                         1 → MV-LV
+                         2 → LV-HV
+        """
+        tap_pos = self._get_tap_position_for_Z()
+        # systembase = 1 → pu on system base (e.g. 100 MVA)
+        rpu, xpu = self.pf_object.GetZpu(tap_pos, pair_index, 1)
+        return complex(rpu, xpu)
+    
+    def Z_hm(self) -> complex:
+        """Z between HV and MV in pu on system base."""
+        return self._get_Z_pair(0)
+    
+    def Z_ml(self) -> complex:
+        """Z between MV and LV in pu on system base."""
+        return self._get_Z_pair(1)
+    
+    def Z_lh(self) -> complex:
+        """Z between LV and HV in pu on system base."""
+        return self._get_Z_pair(2)
+    
+    def _safe_inv(self, Z: complex, eps: float = 1e-12) -> complex:
+        """Avoid infinities in admittance; treat |Z|<eps as open (0 admittance)."""
+        if abs(Z) < eps:
+            return complex(0.0, 0.0)
+        return 1.0 / Z
+    
+    def Y_hm(self) -> complex:
+        """Admittance HV-MV."""
+        return self._safe_inv(self.Z_hm()) * self.n_parallel
+    
+    def Y_ml(self) -> complex:
+        """Admittance MV-LV."""
+        return self._safe_inv(self.Z_ml()) * self.n_parallel
+    
+    def Y_lh(self) -> complex:
+        """Admittance LV-HV."""
+        return self._safe_inv(self.Z_lh()) * self.n_parallel
+    
+    def get_local_admittance_matrix(self) -> tuple[list[list[complex]], list[str]]:
+        """
+        Returns 3×3 pu nodal admittance matrix in order [HV, MV, LV].
+        
+        Returns:
+            Tuple of (3x3 matrix as nested list, [hv_bus, mv_bus, lv_bus])
+        """
+        Y_ab = self.Y_hm()  # HV-MV
+        Y_bc = self.Y_ml()  # MV-LV
+        Y_ca = self.Y_lh()  # LV-HV
+        
+        # Build 3x3 matrix
+        # Off-diagonals
+        Y_01 = -Y_ab  # HV-MV
+        Y_12 = -Y_bc  # MV-LV
+        Y_02 = -Y_ca  # HV-LV
+        
+        # Diagonals
+        Y_00 = Y_ab + Y_ca  # HV
+        Y_11 = Y_ab + Y_bc  # MV
+        Y_22 = Y_bc + Y_ca  # LV
+        
+        matrix = [
+            [Y_00, Y_01, Y_02],
+            [Y_01, Y_11, Y_12],
+            [Y_02, Y_12, Y_22]
+        ]
+        
+        bus_names = [self.hv_bus_name, self.mv_bus_name, self.lv_bus_name]
+        
+        return matrix, bus_names
+    
+    def get_y_matrix_contributions(self, base_mva: float = 100.0) -> dict:
+        """
+        Get Y-matrix contributions for the 3-winding transformer.
+        
+        Returns a dictionary with entries for each bus pair.
+        Format: {(bus_i, bus_j): (Yii_contrib, Yjj_contrib, Yij, Yji)}
+        
+        Note: base_mva parameter is kept for API compatibility but the
+        impedances are already on system base from GetZpu().
+        """
+        Y_ab = self.Y_hm()  # HV-MV
+        Y_bc = self.Y_ml()  # MV-LV  
+        Y_ca = self.Y_lh()  # LV-HV
+        
+        contributions = {
+            # HV-MV pair
+            (self.hv_bus_name, self.mv_bus_name): (Y_ab, Y_ab, -Y_ab, -Y_ab),
+            # MV-LV pair
+            (self.mv_bus_name, self.lv_bus_name): (Y_bc, Y_bc, -Y_bc, -Y_bc),
+            # LV-HV pair (note: LV first, HV second to maintain consistency)
+            (self.lv_bus_name, self.hv_bus_name): (Y_ca, Y_ca, -Y_ca, -Y_ca),
+        }
+        
+        return contributions
+    
+    @property
+    def bus_names(self) -> list[str]:
+        """List of connected bus names [HV, MV, LV]."""
+        return [self.hv_bus_name, self.mv_bus_name, self.lv_bus_name]
+
+
+@dataclass
 class ShuntElement(ABC):
     """Abstract base class for single-terminal elements."""
+    pf_object: pf.DataObject
     name: str
     bus_name: str
     voltage_kv: float
@@ -210,8 +371,59 @@ class GeneratorShunt(ShuntElement):
         if self.xdss_pu > 0 and self.rated_power_mva > 0 and self.rated_voltage_kv > 0:
             # Calculate impedance in ohms
             z_base = (self.rated_voltage_kv ** 2) / self.rated_power_mva
-            x_ohms = self.xdss_pu * z_base
+            r_ohm = self.pf_object.GetAttribute("typ_id").GetAttribute("rstr") * z_base
+            x_ohms = (self.pf_object.GetAttribute("typ_id").GetAttribute("xl") + self.xdss_pu) * z_base
             # Y = 1 / (jX) = -j/X
-            self.admittance = complex(0, -1 / x_ohms)
+            self.admittance = complex(r_ohm, -1 / x_ohms)
         else:
             self.admittance = complex(0, 0)
+
+
+@dataclass
+class ExternalGridShunt(ShuntElement):
+    """
+    External grid element (network equivalent).
+    
+    Models an external grid as a shunt admittance based on short-circuit power.
+    """
+    s_sc_mva: float = 0.0     # Short-circuit power in MVA
+    c_factor: float = 1.0     # Voltage factor for short-circuit calculation
+    r_x_ratio: float = 0.1    # R/X ratio
+    
+    def __post_init__(self):
+        """Calculate grid admittance from short-circuit parameters."""
+        if self.s_sc_mva > 0 and self.voltage_kv > 0:
+            # Short-circuit impedance magnitude
+            z_sc = (self.voltage_kv ** 2) / self.s_sc_mva
+            
+            # Calculate R and X components from R/X ratio
+            # R/X = ratio => R = X * ratio
+            # |Z|² = R² + X² => X = |Z| / sqrt(1 + ratio²)
+            x_sc = z_sc / ((1 + self.r_x_ratio ** 2) ** 0.5) * self.c_factor
+            r_sc = x_sc * self.r_x_ratio
+            
+            # Impedance and admittance
+            z_complex = complex(r_sc, x_sc)
+            self.admittance = 1 / z_complex
+        else:
+            self.admittance = complex(0, 0)
+
+
+@dataclass
+class VoltageSourceShunt(ShuntElement):
+    """
+    AC voltage source element.
+    
+    Models an AC voltage source with specified R and X values.
+    """
+    resistance_ohm: float = 0.0
+    reactance_ohm: float = 0.0
+    
+    def __post_init__(self):
+        """Calculate admittance from R and X parameters."""
+        # Avoid division by zero
+        r = self.resistance_ohm if self.resistance_ohm != 0 else 1e-12
+        x = self.reactance_ohm if self.reactance_ohm != 0 else 1e-12
+        
+        z_complex = complex(r, x)
+        self.admittance = 1 / z_complex
