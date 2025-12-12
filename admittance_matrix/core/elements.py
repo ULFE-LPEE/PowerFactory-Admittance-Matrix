@@ -8,7 +8,18 @@ This module contains the base classes and implementations for:
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
+from enum import Enum
+import numpy as np
 import powerfactory as pf
+
+
+class ShuntFilterType(Enum):
+    """Shunt filter/capacitor layout types matching PowerFactory ElmShnt."""
+    R_L_C = 0       # Series R-L with parallel C
+    R_L = 1         # Series R-L (reactor only)
+    C = 2           # Capacitor only
+    R_L_C_Rp = 3    # Series R-L-C with parallel R
+    R_L_C1_C2_Rp = 4  # High-pass filter: Series R-L-C1 with parallel C2 and Rp
 
 
 @dataclass
@@ -173,6 +184,131 @@ class TransformerBranch(BranchElement):
             Yij = -y / t
         
         return (Yii, Yjj, Yij, Yij)
+
+
+@dataclass
+class CommonImpedanceBranch(BranchElement):
+    """
+    Common impedance element (ElmZpu).
+    
+    Models a general two-port impedance element used for:
+    - Simplified transformer models
+    - Series reactors
+    - Equivalent network impedances
+    
+    Accepts R and X values in Ohms (typically obtained from PowerFactory's
+    GetImpedance() method in the extractor), then converts to per-unit
+    on the system base.
+    
+    Y-matrix contributions:
+        Y_ii = Y_jj = y
+        Y_ij = Y_ji = -y
+    
+    Where y = 1/Z in per-unit on system base.
+    """
+    resistance_ohm: float = 0.0  # Resistance in Ohms
+    reactance_ohm: float = 0.0   # Reactance in Ohms
+    hv_kv: float = 0.0           # High voltage side rated voltage (kV)
+    lv_kv: float = 0.0           # Low voltage side rated voltage (kV)
+    rated_power_mva: float = 0.0 # Rated power (MVA)
+    
+    def __post_init__(self):
+        """Calculate admittance from R and X values in Ohms."""
+        # Avoid division by zero - use small values for zero R or X
+        R_ohm = self.resistance_ohm if self.resistance_ohm != 0 else 1e-12
+        X_ohm = self.reactance_ohm if self.reactance_ohm != 0 else 1e-12
+        Z_ohm = complex(R_ohm, X_ohm)
+
+        self.admittance = 1 / Z_ohm
+    
+    def get_admittance_pu(self, base_mva: float = 100.0) -> complex:
+        """
+        Get admittance in per-unit on system base.
+        
+        Note: The admittance is already calculated in __post_init__ on the
+        system base (_base_mva). If a different base is requested, we need
+        to rescale.
+        """
+        Z_base = (self.hv_kv ** 2) / base_mva
+        if Z_base == 0:
+            Z_base = 1e-12
+        Z_pu = 1 / self.admittance / Z_base
+        return (1 / Z_pu)
+    
+    def get_y_matrix_entries(self, base_mva: float | None = None) -> tuple[complex, complex, complex, complex]:
+        """
+        Return Y-matrix contributions for common impedance.
+        
+        For a simple series impedance:
+            Y_ii = y
+            Y_jj = y
+            Y_ij = Y_ji = -y
+        """
+        y = self.get_admittance_pu(base_mva) if base_mva else self.admittance
+        return (y, y, -y, -y)
+
+
+@dataclass
+class SeriesReactorBranch(BranchElement):
+    """
+    Series reactor element (ElmSind).
+    
+    Models a series reactor (inductor) between two buses, typically used for:
+    - Current limiting reactors
+    - Fault current reduction
+    - Power flow control
+    
+    Accepts R and X values in Ohms (typically obtained from PowerFactory's
+    GetImpedance() method in the extractor), then converts to per-unit
+    on the system base.
+    
+    Y-matrix contributions:
+        Y_ii = Y_jj = y
+        Y_ij = Y_ji = -y
+    
+    Where y = 1/Z in per-unit on system base.
+    """
+    resistance_ohm: float = 0.0  # Resistance in Ohms
+    reactance_ohm: float = 0.0   # Reactance in Ohms
+    rated_power_mva: float = 0.0 # Rated power (MVA) - used for base conversion
+    
+    def __post_init__(self):
+        """Calculate admittance from R and X values in Ohms."""
+        if self.voltage_kv > 0:
+            # Avoid division by zero - use small values for zero R or X
+            R_ohm = self.resistance_ohm if self.resistance_ohm != 0 else 1e-12
+            X_ohm = self.reactance_ohm if self.reactance_ohm != 0 else 1e-12
+            Z_ohm = complex(R_ohm, X_ohm)
+
+            self.admittance = 1 / Z_ohm
+        else:
+            self.admittance = complex(0, 0)
+    
+    def get_admittance_pu(self, base_mva: float = 100.0) -> complex:
+        """
+        Get admittance in per-unit on system base.
+        
+        Note: The admittance is already calculated in __post_init__ on the
+        system base (_base_mva). If a different base is requested, we need
+        to rescale.
+        """
+        Z_base = (self.voltage_kv ** 2) / base_mva
+        if Z_base == 0:
+            Z_base = 1e-12
+        Z_pu = 1 / self.admittance / Z_base
+        return (1 / Z_pu)
+    
+    def get_y_matrix_entries(self, base_mva: float | None = None) -> tuple[complex, complex, complex, complex]:
+        """
+        Return Y-matrix contributions for series reactor.
+        
+        For a simple series impedance:
+            Y_ii = y
+            Y_jj = y
+            Y_ij = Y_ji = -y
+        """
+        y = self.get_admittance_pu(base_mva) if base_mva else self.admittance
+        return (y, y, -y, -y)
 
 
 @dataclass
@@ -347,16 +483,44 @@ class ShuntElement(ABC):
 
 @dataclass
 class LoadShunt(ShuntElement):
-    """Load element - constant impedance model."""
+    """
+    Load element - constant impedance model.
+    
+    For stability analysis, use update_admittance_with_lf_voltage() after
+    running load flow to recalculate admittance using actual bus voltage.
+    """
     p_mw: float = 0.0
     q_mvar: float = 0.0
+    lf_voltage_kv: float = field(default=0.0, repr=False)  # Load flow voltage (set after LF)
     
     def __post_init__(self):
         # Load: P + jQ -> Y = (P - jQ) / |V|^2
+        # Initially use nominal voltage
         if self.voltage_kv > 0:
             self.admittance = complex(self.p_mw, -self.q_mvar) / (self.voltage_kv ** 2)
         else:
             self.admittance = complex(0, 0)
+    
+    def update_admittance_with_lf_voltage(self) -> None:
+        """
+        Recalculate admittance using load flow voltage.
+        
+        Call this after running load flow to get accurate constant impedance
+        model for stability analysis. Uses lf_voltage_kv if set, otherwise
+        falls back to nominal voltage_kv.
+        """
+        # Use LF voltage if available, otherwise nominal
+        v_kv = self.lf_voltage_kv if self.lf_voltage_kv > 0 else self.voltage_kv
+        
+        if v_kv > 0:
+            self.admittance = complex(self.p_mw, -self.q_mvar) / (v_kv ** 2)
+        else:
+            self.admittance = complex(0, 0)
+    
+    def set_lf_voltage(self, voltage_kv: float) -> None:
+        """Set the load flow voltage and recalculate admittance."""
+        self.lf_voltage_kv = voltage_kv
+        self.update_admittance_with_lf_voltage()
 
 
 @dataclass
@@ -427,3 +591,133 @@ class VoltageSourceShunt(ShuntElement):
         
         z_complex = complex(r, x)
         self.admittance = 1 / z_complex
+
+
+@dataclass
+class ShuntFilterShunt(ShuntElement):
+    """
+    Shunt filter/capacitor element (ElmShnt).
+    
+    Models various shunt filter configurations:
+    - R_L_C: Series R-L with parallel C (tuned filter)
+    - R_L: Series R-L (shunt reactor)
+    - C: Capacitor bank
+    - R_L_C_Rp: Series R-L-C with parallel R (damped filter)
+    - R_L_C1_C2_Rp: High-pass filter with series R-L-C1 and parallel C2, Rp
+    
+    All parameters are stored in base units (Ohms, µS, µF) and converted
+    to per-unit in get_admittance_pu().
+    """
+    filter_type: ShuntFilterType = ShuntFilterType.C
+    
+    # Active steps
+    n_cap: float = 1.0   # Number of active capacitor steps
+    n_rea: float = 1.0   # Number of active reactor steps
+    
+    # R-L-C parameters (per step, in base units)
+    bcap_us: float = 0.0     # Capacitor susceptance per step [µS]
+    xrea_ohm: float = 0.0    # Reactor reactance per step [Ohm]
+    rrea_ohm: float = 0.0    # Reactor resistance per step [Ohm]
+    gparac_us: float = 0.0   # Parallel conductance per step [µS]
+    
+    # High-pass filter parameters
+    c1_uf: float = 0.0       # Series capacitor C1 [µF]
+    c2_uf: float = 0.0       # Parallel capacitor C2 [µF]
+    rpara_ohm: float = 0.0   # Parallel resistance [Ohm]
+    
+    # System frequency
+    f_sys: float = 50.0      # System frequency [Hz]
+    
+    def __post_init__(self):
+        """Calculate admittance in Siemens based on filter type and parameters."""
+        self.admittance = self._calculate_admittance_siemens()
+    
+    def _calculate_admittance_siemens(self) -> complex:
+        """Calculate total admittance in Siemens."""
+        omega_sys = 2 * np.pi * self.f_sys
+        
+        if self.filter_type == ShuntFilterType.R_L_C:
+            # Series R-L with parallel C
+            # Reactor branch (R + jX)
+            if self.rrea_ohm == 0 and self.xrea_ohm == 0:
+                Y_rea_step = complex(0, 0)
+            else:
+                denom = self.rrea_ohm**2 + self.xrea_ohm**2
+                Y_rea_step = complex(self.rrea_ohm, -self.xrea_ohm) / denom
+            Y_rea_total = Y_rea_step * self.n_rea
+            
+            # Capacitor branch (jB)
+            Y_cap_total = 1j * (self.bcap_us * 1e-6) * self.n_cap
+        
+        elif self.filter_type == ShuntFilterType.R_L:
+            # Series R-L (reactor only)
+            denom = self.rrea_ohm**2 + self.xrea_ohm**2
+            if denom == 0:
+                Y_step = complex(0, 0)
+            else:
+                Y_step = complex(self.rrea_ohm, -self.xrea_ohm) / denom
+            return Y_step * self.n_rea
+        
+        elif self.filter_type == ShuntFilterType.C:
+            # Capacitor bank with optional parallel conductance
+            Y_step = (self.gparac_us * 1e-6) + 1j * (self.bcap_us * 1e-6)
+            return Y_step * self.n_cap
+        
+        elif self.filter_type == ShuntFilterType.R_L_C_Rp:
+            # Damped filter: Series R-L-C with parallel Rp
+            # Similar to R_L_C but with additional parallel resistance
+            if self.rrea_ohm == 0 and self.xrea_ohm == 0:
+                Y_rea_step = complex(0, 0)
+            else:
+                denom = self.rrea_ohm**2 + self.xrea_ohm**2
+                Y_rea_step = complex(self.rrea_ohm, -self.xrea_ohm) / denom
+            Y_rea_total = Y_rea_step * self.n_rea
+            
+            Y_cap_total = 1j * (self.bcap_us * 1e-6) * self.n_cap
+            
+            # Parallel resistance
+            Y_p = 1 / self.rpara_ohm if self.rpara_ohm != 0 else complex(0, 0)
+            
+            return Y_rea_total + Y_cap_total + Y_p
+        
+        elif self.filter_type == ShuntFilterType.R_L_C1_C2_Rp:
+            # High-pass filter: Series R-L-C1 with parallel C2 and Rp
+            B_C1 = omega_sys * self.c1_uf * 1e-6
+            B_C2 = omega_sys * self.c2_uf * 1e-6
+            
+            # Branch 1: Series R-L-C1
+            if B_C1 == 0:
+                Z_C1 = complex(0, 0)
+            else:
+                Z_C1 = -1j / B_C1
+            
+            Z_branch = complex(self.rrea_ohm, self.xrea_ohm) + Z_C1
+            if abs(Z_branch) < 1e-12:
+                Y_branch = complex(0, 0)
+            else:
+                Y_branch = 1 / Z_branch
+            
+            # Branch 2: Parallel resistor Rp
+            Y_p = 1 / self.rpara_ohm if self.rpara_ohm != 0 else complex(0, 0)
+            
+            # Branch 3: Parallel capacitor C2
+            Y_c2 = 1j * B_C2
+            
+            # Total admittance (all branches in parallel)
+            Y_total = Y_branch + Y_p + Y_c2
+            
+            # Apply capacitor steps (filters usually switch as a unit)
+            return Y_total * self.n_cap
+        
+        else:
+            return complex(0, 0)
+    
+    def get_admittance_pu(self, base_mva: float = 100.0) -> complex:
+        """
+        Get admittance in per-unit on system base.
+        Y_pu = Y_siemens * Z_base = Y_siemens * (V_base^2 / S_base)
+        """
+        if self.voltage_kv > 0:
+            z_base = (self.voltage_kv ** 2) / base_mva
+            return self.admittance * z_base
+        return self.admittance

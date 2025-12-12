@@ -72,6 +72,29 @@ class Network:
         self.branches, self.shunts, self.transformers_3w = get_network_elements(self.app)
         self.bus_names = get_unique_buses(self.branches, self.shunts, self.transformers_3w)
     
+    def _update_load_admittances_with_lf_voltage(self) -> None:
+        """
+        Update load admittances using actual load flow bus voltages.
+        
+        For constant impedance load modeling in stability analysis,
+        the admittance should be calculated using the actual operating
+        voltage rather than the rated voltage.
+        
+        Requires lf_results to be populated (call run_load_flow first).
+        """
+        from ..core.elements import LoadShunt
+        
+        if self.lf_results is None:
+            return
+        
+        for shunt in self.shunts:
+            if isinstance(shunt, LoadShunt):
+                # Get the load flow voltage for this bus
+                bus_name = shunt.bus_name
+                if bus_name in self.lf_results:
+                    lf_voltage_kv = self.lf_results[bus_name].voltage_kv
+                    shunt.set_lf_voltage(lf_voltage_kv)
+    
     def _build_matrices(self, include_generators: bool = False) -> None:
         """
         Build admittance matrices from the network elements.
@@ -100,6 +123,10 @@ class Network:
         """
         Execute load flow calculation in PowerFactory.
         
+        After successful load flow, updates load admittances with actual
+        bus voltages and rebuilds the stability matrix for accurate
+        constant impedance modeling.
+        
         Returns:
             True if load flow converged, False otherwise
         """
@@ -118,6 +145,12 @@ class Network:
             )
             # Update gen_names to match gen_data order (used for plotting)
             self._gen_data_names = [g.name for g in self.gen_data]
+            
+            # Update load admittances with actual load flow voltages
+            self._update_load_admittances_with_lf_voltage()
+            
+            # Rebuild stability matrix with updated load admittances
+            self._build_matrices()
 
         self._show()
         return success
