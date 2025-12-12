@@ -11,7 +11,9 @@ import powerfactory as pf
 from ..core.elements import (
     BranchElement, ShuntElement,
     LineBranch, SwitchBranch, TransformerBranch, Transformer3WBranch,
-    LoadShunt, GeneratorShunt, ExternalGridShunt, VoltageSourceShunt
+    CommonImpedanceBranch, SeriesReactorBranch,
+    LoadShunt, GeneratorShunt, ExternalGridShunt, VoltageSourceShunt,
+    ShuntFilterShunt, ShuntFilterType
 )
 
 def get_bus_full_name(terminal) -> str:
@@ -126,7 +128,7 @@ def get_network_elements(app) -> tuple[list[BranchElement], list[ShuntElement], 
                 continue
             # Check if buses are energized
             if from_bus.IsEnergized() != 1 or to_bus.IsEnergized() != 1:
-                print(f"[WARNING] Switch '{switch.loc_name}': Bus(es) de-energized, skipping")
+                # print(f"[WARNING] Switch '{switch.loc_name}': Bus(es) de-energized, skipping")
                 continue
         except Exception as e:
             print(f"[ERROR] Switch '{switch.loc_name}': Failed to get cubicle/terminal - {type(e).__name__}: {e}")
@@ -226,6 +228,119 @@ def get_network_elements(app) -> tuple[list[BranchElement], list[ShuntElement], 
             tap_ratio=tap_ratio,
             tap_side=tap_side,
             n_parallel=n_parallel
+        ))
+
+    # --- Branch elements: Common Impedances (ElmZpu) ---
+    pf_zpu: List[pf.DataObject] = app.GetCalcRelevantObjects("*.ElmZpu", 0, 0, 0)
+    for zpu in pf_zpu:
+        if zpu.outserv == 1:
+            continue
+        
+        # Check if element is energized
+        if zpu.IsEnergized() != 1:
+            continue
+        
+        # Get terminals via cubicles (side 0 and side 1)
+        try:
+            cub0 = zpu.GetCubicle(0)
+            cub1 = zpu.GetCubicle(1)
+            if cub0 is None or cub1 is None:
+                print(f"[WARNING] Common Impedance '{zpu.loc_name}': Missing cubicle(s), skipping")
+                continue
+            from_bus = cub0.cterm
+            to_bus = cub1.cterm
+            if from_bus is None or to_bus is None:
+                print(f"[WARNING] Common Impedance '{zpu.loc_name}': Missing terminal(s) (cterm is None), skipping")
+                continue
+            # Check if buses are energized
+            if from_bus.IsEnergized() != 1 or to_bus.IsEnergized() != 1:
+                print(f"[WARNING] Common Impedance '{zpu.loc_name}': Bus(es) de-energized, skipping")
+                continue
+        except Exception as e:
+            print(f"[ERROR] Common Impedance '{zpu.loc_name}': Failed to get cubicle/terminal - {type(e).__name__}: {e}")
+            continue
+        
+        # Get voltage levels from terminals
+        hv_kv = from_bus.uknom
+        lv_kv = to_bus.uknom
+        
+        # Get impedance from PowerFactory (returns [R, X] in Ohms at specified voltage)
+        imp_pf = zpu.GetImpedance(hv_kv) # Return imepedance in Ohms (based on documentation)
+        if (imp_pf[0] == 1):
+            print(f"[WARNING] Common Impedance '{zpu.loc_name}': Error obtaining impedance, skipping")
+            continue
+        R_ohm = imp_pf[1]
+        X_ohm = imp_pf[2]
+        
+        # Get rated power (if available) - ElmZpu may have Sn attribute
+        rated_mva = getattr(zpu, 'Sn', 0.0) or 0.0
+        
+        branches.append(CommonImpedanceBranch(
+            pf_object=zpu,
+            name=zpu.loc_name,
+            from_bus_name=get_bus_full_name(from_bus),
+            to_bus_name=get_bus_full_name(to_bus),
+            voltage_kv=hv_kv,  # Use from-bus voltage as reference
+            resistance_ohm=R_ohm,
+            reactance_ohm=X_ohm,
+            hv_kv=hv_kv,
+            lv_kv=lv_kv,
+            rated_power_mva=rated_mva,
+        ))
+
+    # --- Branch elements: Series Reactors (ElmSind) ---
+    pf_sind: List[pf.DataObject] = app.GetCalcRelevantObjects("*.ElmSind", 0, 0, 0)
+    for sind in pf_sind:
+        if sind.outserv == 1:
+            continue
+        
+        # Check if element is energized
+        if sind.IsEnergized() != 1:
+            continue
+        
+        # Get terminals via cubicles (side 0 and side 1)
+        try:
+            cub0 = sind.GetCubicle(0)
+            cub1 = sind.GetCubicle(1)
+            if cub0 is None or cub1 is None:
+                print(f"[WARNING] Series Reactor '{sind.loc_name}': Missing cubicle(s), skipping")
+                continue
+            from_bus = cub0.cterm
+            to_bus = cub1.cterm
+            if from_bus is None or to_bus is None:
+                print(f"[WARNING] Series Reactor '{sind.loc_name}': Missing terminal(s) (cterm is None), skipping")
+                continue
+            # Check if buses are energized
+            if from_bus.IsEnergized() != 1 or to_bus.IsEnergized() != 1:
+                print(f"[WARNING] Series Reactor '{sind.loc_name}': Bus(es) de-energized, skipping")
+                continue
+        except Exception as e:
+            print(f"[ERROR] Series Reactor '{sind.loc_name}': Failed to get cubicle/terminal - {type(e).__name__}: {e}")
+            continue
+        
+        # Get voltage level from terminal
+        voltage_kv = from_bus.uknom
+        
+        # Get impedance from PowerFactory (returns [R, X] in Ohms at specified voltage)
+        imp_pf = sind.GetImpedance(voltage_kv) # Return imepedance in Ohms (based on documentation)
+        if (imp_pf[0] == 1):
+            print(f"[WARNING] Series Reactor '{sind.loc_name}': Error obtaining impedance, skipping")
+            continue
+        R_ohm = imp_pf[1]
+        X_ohm = imp_pf[2]
+        
+        # Get rated power (if available)
+        rated_mva = getattr(sind, 'Sn', 0.0) or 0.0
+        
+        branches.append(SeriesReactorBranch(
+            pf_object=sind,
+            name=sind.loc_name,
+            from_bus_name=get_bus_full_name(from_bus),
+            to_bus_name=get_bus_full_name(to_bus),
+            voltage_kv=voltage_kv,
+            resistance_ohm=R_ohm,
+            reactance_ohm=X_ohm,
+            rated_power_mva=rated_mva,
         ))
 
     # --- Shunt elements: Synchronous Generators (ElmSym) ---
@@ -387,6 +502,82 @@ def get_network_elements(app) -> tuple[list[BranchElement], list[ShuntElement], 
             voltage_kv=bus.uknom,
             resistance_ohm=r_ohm,
             reactance_ohm=x_ohm
+        ))
+
+    # --- Shunt elements: Shunt Filters/Capacitors (ElmShnt) ---
+    pf_shunts: List[pf.DataObject] = app.GetCalcRelevantObjects("*.ElmShnt", 0, 0, 0)
+    for shnt in pf_shunts:
+        if shnt.outserv == 1:
+            continue
+        
+        # Check if element is energized
+        if shnt.IsEnergized() != 1:
+            continue
+        
+        try:
+            cub0 = shnt.GetCubicle(0)
+            if cub0 is None:
+                print(f"[WARNING] Shunt Filter '{shnt.loc_name}': Missing cubicle, skipping")
+                continue
+            bus = cub0.cterm
+            if bus is None:
+                print(f"[WARNING] Shunt Filter '{shnt.loc_name}': Missing terminal (cterm is None), skipping")
+                continue
+            # Check if bus is energized
+            if bus.IsEnergized() != 1:
+                print(f"[WARNING] Shunt Filter '{shnt.loc_name}': Bus de-energized, skipping")
+                continue
+        except Exception as e:
+            print(f"[ERROR] Shunt Filter '{shnt.loc_name}': Failed to get cubicle/terminal - {type(e).__name__}: {e}")
+            continue
+        
+        # Get filter type (shtype attribute: 0=R_L_C, 1=R_L, 2=C, 3=R_L_C_Rp, 4=R_L_C1_C2_Rp)
+        shtype = getattr(shnt, 'shtype', 2) or 2  # Default to C (capacitor)
+        try:
+            filter_type = ShuntFilterType(shtype)
+        except ValueError:
+            filter_type = ShuntFilterType.C
+        
+        # Get active steps
+        try:
+            n_cap = shnt.GetAttribute("ncap_a") or 1.0
+        except Exception:
+            n_cap = 1.0
+        
+        try:
+            n_rea = shnt.GetAttribute("nrea_a") or 1.0
+        except Exception:
+            n_rea = 1.0
+        
+        # Get R-L-C parameters (per step)
+        bcap_us = getattr(shnt, 'bcap', 0.0) or 0.0      # Capacitor susceptance [µS]
+        xrea_ohm = getattr(shnt, 'xrea', 0.0) or 0.0    # Reactor reactance [Ohm]
+        rrea_ohm = getattr(shnt, 'rrea', 0.0) or 0.0    # Reactor resistance [Ohm]
+        gparac_us = getattr(shnt, 'gparac', 0.0) or 0.0  # Parallel conductance [µS]
+
+        print(f"Shunt Filter '{shnt.loc_name}': bcap={bcap_us} µS, xrea={xrea_ohm} Ohm, rrea={rrea_ohm} Ohm, gparac={gparac_us} µS")
+        
+        # High-pass filter parameters
+        c1_uf = getattr(shnt, 'c1', 0.0) or 0.0         # Series capacitor C1 [µF]
+        c2_uf = getattr(shnt, 'c2', 0.0) or 0.0         # Parallel capacitor C2 [µF]
+        rpara_ohm = getattr(shnt, 'rpara', 0.0) or 0.0  # Parallel resistance [Ohm]
+        
+        shunts.append(ShuntFilterShunt(
+            pf_object=shnt,
+            name=shnt.loc_name,
+            bus_name=get_bus_full_name(bus),
+            voltage_kv=bus.uknom,
+            filter_type=filter_type,
+            n_cap=n_cap,
+            n_rea=n_rea,
+            bcap_us=bcap_us,
+            xrea_ohm=xrea_ohm,
+            rrea_ohm=rrea_ohm,
+            gparac_us=gparac_us,
+            c1_uf=c1_uf,
+            c2_uf=c2_uf,
+            rpara_ohm=rpara_ohm,
+            f_sys=50.0  # System frequency
         ))
 
     # --- Three-winding Transformers (ElmTr3) ---

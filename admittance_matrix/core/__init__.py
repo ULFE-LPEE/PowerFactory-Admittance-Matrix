@@ -8,11 +8,15 @@ from .elements import (
     SwitchBranch,
     TransformerBranch,
     Transformer3WBranch,
+    CommonImpedanceBranch,
+    SeriesReactorBranch,
     ShuntElement,
     LoadShunt,
     GeneratorShunt,
     ExternalGridShunt,
     VoltageSourceShunt,
+    ShuntFilterShunt,
+    ShuntFilterType,
 )
 
 from .network import Network
@@ -23,10 +27,14 @@ __all__ = [
     'SwitchBranch',
     'TransformerBranch',
     'Transformer3WBranch',
+    'CommonImpedanceBranch',
+    'SeriesReactorBranch',
     'ShuntElement',
     'LoadShunt',
     'GeneratorShunt',
     'ExternalGridShunt',
     'VoltageSourceShunt',
+    'ShuntFilterShunt',
+    'ShuntFilterType',
     'Network',
 ]
