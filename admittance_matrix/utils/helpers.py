@@ -106,7 +106,6 @@ def obtain_rms_results(app: pf.Application, filesPath: str, pfResultsName: str =
         if gen.IsEnergized() != 1:
             continue
         generators.append(gen)
-    print("Generators: ", len(generators))
     print("Generators: ", [gen.GetAttribute("loc_name") for gen in generators])
 
     # Get all voltage sources (ElmVac) - these will be monitored but not tripped
@@ -119,8 +118,19 @@ def obtain_rms_results(app: pf.Application, filesPath: str, pfResultsName: str =
         if vac.IsEnergized() != 1:
             continue
         voltage_sources.append(vac)
-    print("Voltage sources: ", len(voltage_sources))
     print("Voltage sources: ", [vac.GetAttribute("loc_name") for vac in voltage_sources])
+
+    # Get all external grids (ElmXnet) - these will be monitored but not tripped
+    all_external_grids = app.GetCalcRelevantObjects("*.ElmXnet", 1, 1, 1)
+    print("All external grids: ", len(all_external_grids))
+    external_grids: List[DataObject] = []
+    for xnet in all_external_grids:
+        if xnet.GetAttribute("outserv") == 1:
+            continue
+        if xnet.IsEnergized() != 1:
+            continue
+        external_grids.append(xnet)
+    print("External grids: ", [xnet.GetAttribute("loc_name") for xnet in external_grids])
 
     # Setup monitoring for generators
     for gen in generators:
@@ -135,6 +145,14 @@ def obtain_rms_results(app: pf.Application, filesPath: str, pfResultsName: str =
         obj = elmRes.CreateObject("IntMon")
         obj.SetAttribute("loc_name", vac.GetAttribute("loc_name"))
         obj.SetAttribute("obj_id", vac)
+        selected_variables = ["m:P:bus1"]  # Active power output
+        obj.SetAttribute("vars", selected_variables)
+
+    # Setup monitoring for external grids
+    for xnet in external_grids:
+        obj = elmRes.CreateObject("IntMon")
+        obj.SetAttribute("loc_name", xnet.GetAttribute("loc_name"))
+        obj.SetAttribute("obj_id", xnet)
         selected_variables = ["m:P:bus1"]  # Active power output
         obj.SetAttribute("vars", selected_variables)
 
@@ -226,6 +244,12 @@ def obtain_rms_results(app: pf.Application, filesPath: str, pfResultsName: str =
         for vac in voltage_sources:
             resultObject.append(None)
             elements.append(vac)
+            variable.append("m:P:bus1")
+        
+        # Add external grids to export
+        for xnet in external_grids:
+            resultObject.append(None)
+            elements.append(xnet)
             variable.append("m:P:bus1")
         
         # Set the selected variables

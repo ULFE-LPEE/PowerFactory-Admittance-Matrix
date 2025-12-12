@@ -8,8 +8,8 @@ retrieve results from PowerFactory.
 import cmath
 
 from admittance_matrix.powerflow.extractor import get_bus_full_name
-from .results import BusResult, GeneratorResult, VoltageSourceResult
-from ..core.elements import ShuntElement, GeneratorShunt, VoltageSourceShunt
+from .results import BusResult, GeneratorResult, VoltageSourceResult, ExternalGridResult
+from ..core.elements import ShuntElement, GeneratorShunt, VoltageSourceShunt, ExternalGridShunt
 
 
 def _calculate_internal_voltage(
@@ -273,4 +273,91 @@ def get_voltage_source_data_from_pf(
         ))
     
     print("Number of voltage sources extracted:", len(results))
+    return results
+
+
+def get_external_grid_data_from_pf(
+    app,
+    shunts: list[ShuntElement],
+    lf_results: dict[str, BusResult],
+    base_mva: float = 100.0
+) -> list[ExternalGridResult]:
+    """
+    Get external grid data including internal voltage from PowerFactory load flow results.
+    
+    For external grids, the internal voltage is calculated similarly to generators:
+    E = V + Z × I, where I = (S*/V*)
+    
+    Args:
+        app: PowerFactory application instance
+        shunts: List of shunt elements (to extract external grids)
+        lf_results: Load flow results from get_load_flow_results()
+        base_mva: System base power in MVA
+        
+    Returns:
+        List of ExternalGridResult objects
+    """
+    import cmath
+    
+    results: list[ExternalGridResult] = []
+    
+    # Get all external grids from PowerFactory
+    pf_xnets = app.GetCalcRelevantObjects("*.ElmXnet", 0, 0, 0)
+    xnet_pf_map = {xnet.loc_name: xnet for xnet in pf_xnets}
+    
+    for s in shunts:
+        if not isinstance(s, ExternalGridShunt):
+            continue
+        
+        bus_result = lf_results.get(s.bus_name)
+        if bus_result is None:
+            print(f"Warning: No load flow result for bus {s.bus_name}, skipping external grid {s.name}")
+            continue
+        
+        voltage = bus_result.voltage_complex
+        
+        # Get PowerFactory object for this external grid
+        pf_xnet = xnet_pf_map.get(s.name)
+        if pf_xnet is None:
+            print(f"Warning: PowerFactory object not found for external grid {s.name}")
+            continue
+        
+        # Get P and Q from load flow results
+        p_mw = pf_xnet.GetAttribute("m:P:bus1") or 0.0
+        q_mvar = pf_xnet.GetAttribute("m:Q:bus1") or 0.0
+        
+        # Calculate impedance on system base from short-circuit data
+        if s.s_sc_mva > 0 and s.voltage_kv > 0:
+            z_sc = (s.voltage_kv ** 2) / s.s_sc_mva
+            x_sc = z_sc / ((1 + s.r_x_ratio ** 2) ** 0.5) * s.c_factor
+            r_sc = x_sc * s.r_x_ratio
+            z_ohm = complex(r_sc, x_sc)
+            z_base = (s.voltage_kv ** 2) / base_mva
+            z_pu_sys = z_ohm / z_base if z_base > 0 else complex(0, 0)
+        else:
+            z_pu_sys = complex(0, 0)
+        
+        # Calculate internal voltage: E = V + Z × (S*/V*)
+        if abs(voltage) > 0 and abs(z_pu_sys) > 0:
+            s_pu = complex(p_mw / base_mva, q_mvar / base_mva)
+            i_pu = (s_pu.conjugate() / voltage.conjugate())
+            internal_v = voltage + z_pu_sys * i_pu
+        else:
+            # If no impedance, internal voltage = terminal voltage
+            internal_v = voltage
+        
+        internal_v_mag = abs(internal_v)
+        internal_v_angle = cmath.phase(internal_v) * 180 / cmath.pi
+        
+        results.append(ExternalGridResult(
+            name=s.name,
+            bus_name=s.bus_name,
+            voltage=voltage,
+            impedance_pu=z_pu_sys,
+            internal_voltage=internal_v,
+            internal_voltage_mag=internal_v_mag,
+            internal_voltage_angle=internal_v_angle
+        ))
+    
+    print("Number of external grids extracted:", len(results))
     return results

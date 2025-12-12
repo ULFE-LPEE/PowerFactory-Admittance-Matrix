@@ -6,14 +6,15 @@ the functionality of the admittance_matrix library.
 """
 
 import numpy as np
+import powerfactory as pf
 
 from ..matrices.builder import build_admittance_matrix, get_unique_buses, MatrixType
 from ..matrices.reducer import reduce_to_generator_internal_buses
 from ..matrices.analysis import calculate_power_distribution_ratios
 from ..matrices.diagnostics import diagnose_network, print_diagnostics
 from ..powerflow.extractor import get_network_elements
-from ..powerflow.solver import run_load_flow, get_load_flow_results, get_generator_data_from_pf, get_voltage_source_data_from_pf
-from ..powerflow.results import GeneratorResult, VoltageSourceResult
+from ..powerflow.solver import run_load_flow, get_load_flow_results, get_generator_data_from_pf, get_voltage_source_data_from_pf, get_external_grid_data_from_pf
+from ..powerflow.results import GeneratorResult, VoltageSourceResult, ExternalGridResult
 
 
 class Network:
@@ -36,10 +37,11 @@ class Network:
             app: PowerFactory application instance (already connected and with active project)
             base_mva: System base power in MVA (default 100)
         """
-        self.app = app
-        self.base_mva = base_mva
-        
+        self.app: pf.Application = app
+        self._hide()
+
         # Network data
+        self.base_mva = base_mva
         self.branches = []
         self.shunts = []
         self.transformers_3w = []  # 3-winding transformers
@@ -57,17 +59,20 @@ class Network:
         self.lf_results = None
         self.gen_data = None  # Generator results
         self.vs_data = None   # Voltage source results
+        self.xnet_data = None # External grid results
         self.source_data = None  # Combined source data for analysis
         
         # Extract network elements
         self._extract_network()
-    
+        self._build_matrices()
+        self._show()
+
     def _extract_network(self):
         """Extract network elements from PowerFactory."""
         self.branches, self.shunts, self.transformers_3w = get_network_elements(self.app)
         self.bus_names = get_unique_buses(self.branches, self.shunts, self.transformers_3w)
     
-    def build_matrices(self, include_generators: bool = False) -> None:
+    def _build_matrices(self, include_generators: bool = False) -> None:
         """
         Build admittance matrices from the network elements.
         
@@ -98,6 +103,7 @@ class Network:
         Returns:
             True if load flow converged, False otherwise
         """
+        self._hide()
         success = run_load_flow(self.app)
         if success:
             self.lf_results = get_load_flow_results(self.app)
@@ -107,14 +113,19 @@ class Network:
             self.vs_data = get_voltage_source_data_from_pf(
                 self.app, self.shunts, self.lf_results, self.base_mva
             )
+            self.xnet_data = get_external_grid_data_from_pf(
+                self.app, self.shunts, self.lf_results, self.base_mva
+            )
             # Update gen_names to match gen_data order (used for plotting)
             self._gen_data_names = [g.name for g in self.gen_data]
+
+        self._show()
         return success
     
     def reduce_to_generators(
         self,
         include_voltage_sources: bool = True,
-        include_external_grids: bool = False
+        include_external_grids: bool = True
     ) -> None:
         """
         Apply Kron reduction to obtain generator internal bus matrix.
@@ -128,6 +139,7 @@ class Network:
             include_voltage_sources: If True, include AC voltage sources in reduction
             include_external_grids: If True, include external grids in reduction
         """
+        self._hide()
         if self.Y_stab is None:
             raise RuntimeError("Must call build_matrices() first")
         
@@ -136,6 +148,8 @@ class Network:
             include_voltage_sources=include_voltage_sources,
             include_external_grids=include_external_grids
         )
+
+        self._show()
     
     def calculate_power_ratios(self, disturbance_source_name: str) -> tuple[np.ndarray, list[str], list[str]]:
         """
@@ -147,6 +161,7 @@ class Network:
         Returns:
             Tuple of (ratios array, source names in order, source types in order)
         """
+        self._hide()
         if self.Y_reduced is None:
             raise RuntimeError("Must call reduce_to_generators() first")
         if self.gen_data is None:
@@ -159,13 +174,13 @@ class Network:
         ratios, source_names_order, source_types_order = calculate_power_distribution_ratios(
             self.Y_reduced, self.source_data, disturbance_source_name
         )
+        self._show()
         return ratios, source_names_order, source_types_order
     
     def calculate_all_power_ratios(
         self,
         outage_generators: list[str] = None,
         normalize: bool = True,
-        verbose: bool = False
     ) -> tuple[np.ndarray, list[str], list[str], list[str]]:
         """
         Calculate power distribution ratios matrix for multiple generator outages.
@@ -177,7 +192,6 @@ class Network:
             outage_generators: List of generator names to trip. If None, all 
                               synchronous generators will be used.
             normalize: If True, normalize each row to sum to 100%
-            verbose: If True, print progress every 10 generators
             
         Returns:
             Tuple of:
@@ -186,6 +200,7 @@ class Network:
                 - source_names: List of all source names (column labels)
                 - source_types: List of source types (column types)
         """
+        self._hide()
         if self.Y_reduced is None:
             raise RuntimeError("Must call reduce_to_generators() first")
         if self.gen_data is None:
@@ -219,28 +234,24 @@ class Network:
                 valid_outages.append(gen_name)
                 
             except Exception as e:
-                if verbose:
-                    print(f"Skipping {gen_name}: {e}")
+                print(f"Skipping {gen_name}: {e}")
         
         ratios_matrix = np.array(all_ratios)
         
-        if verbose:
-            print(f"\nRatios matrix shape: {ratios_matrix.shape}")
-            print(f"  Rows (outages): {len(valid_outages)}")
-            print(f"  Columns (sources): {len(source_names)}")
-        
+        self._show()
         return ratios_matrix, valid_outages, source_names, source_types
     
     def _build_source_data(self) -> None:
         """
         Build combined source data list matching the order in gen_names.
         
-        This combines generator and voltage source data in the same order
+        This combines generator, voltage source, and external grid data in the same order
         as they appear in the reduced Y-matrix.
         """
         # Create lookup dictionaries
         gen_lookup = {g.name: g for g in self.gen_data} if self.gen_data else {}
         vs_lookup = {v.name: v for v in self.vs_data} if self.vs_data else {}
+        xnet_lookup = {x.name: x for x in self.xnet_data} if self.xnet_data else {}
         
         self.source_data = []
         for name, stype in zip(self.gen_names, self.source_types):
@@ -248,6 +259,8 @@ class Network:
                 self.source_data.append(gen_lookup[name])
             elif stype == 'voltage_source' and name in vs_lookup:
                 self.source_data.append(vs_lookup[name])
+            elif stype == 'external_grid' and name in xnet_lookup:
+                self.source_data.append(xnet_lookup[name])
             else:
                 print(f"Warning: Source '{name}' (type: {stype}) not found in load flow data")
     
@@ -295,6 +308,16 @@ class Network:
                     return 'Unknown'
         
         return 'Unknown'
+    
+    def _hide(self) -> None:
+        """Hide the PowerFactory application window."""
+        if self.app is not None:
+            self.app.Hide()
+    
+    def _show(self) -> None:
+        """Show the PowerFactory application window."""
+        if self.app is not None:
+            self.app.Show()
     
     @property
     def gen_zones(self) -> list[str]:

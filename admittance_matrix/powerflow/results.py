@@ -56,3 +56,16 @@ class VoltageSourceResult:
     internal_voltage_mag: float  # |E| magnitude (p.u.)
     internal_voltage_angle: float  # E angle (degrees)
     source_type: str = 'voltage_source'  # Source type identifier
+
+
+@dataclass
+class ExternalGridResult:
+    """External grid data with terminal voltage and internal voltage."""
+    name: str
+    bus_name: str
+    voltage: complex          # Terminal voltage as complex phasor (p.u.)
+    impedance_pu: complex     # Internal impedance on system base (p.u.)
+    internal_voltage: complex # Internal voltage (behind impedance)
+    internal_voltage_mag: float  # |E| magnitude (p.u.)
+    internal_voltage_angle: float  # E angle (degrees)
+    source_type: str = 'external_grid'  # Source type identifier
