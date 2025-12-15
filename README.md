@@ -16,6 +16,12 @@ A Python library for extracting admittance matrices from DIgSILENT PowerFactory 
 pip install git+https://github.com/valenciaga1231/PF_Admittance_Matrix.git
 ```
 
+To update to the latest version:
+
+```bash
+pip install --upgrade git+https://github.com/valenciaga1231/PF_Admittance_Matrix.git
+```
+
 ### Local Development
 
 ```bash

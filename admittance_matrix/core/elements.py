@@ -535,10 +535,8 @@ class GeneratorShunt(ShuntElement):
         if self.xdss_pu > 0 and self.rated_power_mva > 0 and self.rated_voltage_kv > 0:
             # Calculate impedance in ohms
             z_base = (self.rated_voltage_kv ** 2) / self.rated_power_mva
-            r_ohm = self.pf_object.GetAttribute("typ_id").GetAttribute("rstr") * z_base
-            x_ohms = (self.pf_object.GetAttribute("typ_id").GetAttribute("xl") + self.xdss_pu) * z_base
-            # Y = 1 / (jX) = -j/X
-            self.admittance = complex(r_ohm, -1 / x_ohms)
+            x_ohms = self.xdss_pu * z_base
+            self.admittance = complex(0, -1 / x_ohms)
         else:
             self.admittance = complex(0, 0)
 

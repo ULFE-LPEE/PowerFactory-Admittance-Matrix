@@ -418,8 +418,8 @@ def get_network_elements(app) -> tuple[list[BranchElement], list[ShuntElement], 
             name=load.loc_name,
             bus_name=get_bus_full_name(bus),
             voltage_kv=bus.uknom,
-            p_mw=load.plini,
-            q_mvar=load.qlini
+            p_mw=load.plini*scale0,
+            q_mvar=load.qlini*scale0
         ))
 
     # --- Shunt elements: External Grids (ElmXnet) ---
