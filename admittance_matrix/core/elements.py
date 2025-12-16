@@ -69,10 +69,10 @@ class LineBranch(BranchElement):
     
     def __post_init__(self):
         # Calculate series admittance for a single line
-        if self.resistance_ohm == 0 and self.reactance_ohm == 0:
-            single_admittance = complex(0, 0)
-        else:
-            single_admittance = 1 / complex(self.resistance_ohm, self.reactance_ohm)
+        # Use small values to avoid numerical instabilities (near-zero impedance)
+        r = self.resistance_ohm if self.resistance_ohm != 0 else 1e-12
+        x = self.reactance_ohm if self.reactance_ohm != 0 else 1e-12
+        single_admittance = 1 / complex(r, x)
         
         # Multiply by number of parallel systems (parallel admittances add up)
         self.admittance = single_admittance * self.n_parallel
@@ -137,11 +137,11 @@ class TransformerBranch(BranchElement):
     
     def __post_init__(self):
         # Calculate series admittance in per-unit on transformer base for single transformer
-        if self.resistance_pu == 0 and self.reactance_pu == 0:
-            single_admittance = complex(0, 0)
-        else:
-            z_pu_trafo = complex(self.resistance_pu, self.reactance_pu)
-            single_admittance = 1 / z_pu_trafo  # Y in p.u. on transformer base
+        # Use small values to avoid numerical instabilities
+        r = self.resistance_pu if self.resistance_pu != 0 else 1e-12
+        x = self.reactance_pu if self.reactance_pu != 0 else 1e-12
+        z_pu_trafo = complex(r, x)
+        single_admittance = 1 / z_pu_trafo  # Y in p.u. on transformer base
         
         # Multiply by number of parallel transformers (parallel admittances add up)
         self.admittance = single_admittance * self.n_parallel
@@ -275,14 +275,13 @@ class SeriesReactorBranch(BranchElement):
     def __post_init__(self):
         """Calculate admittance from R and X values in Ohms."""
         if self.voltage_kv > 0:
-            # Avoid division by zero - use small values for zero R or X
+            # Use small values to avoid numerical instabilities
             R_ohm = self.resistance_ohm if self.resistance_ohm != 0 else 1e-12
             X_ohm = self.reactance_ohm if self.reactance_ohm != 0 else 1e-12
             Z_ohm = complex(R_ohm, X_ohm)
-
             self.admittance = 1 / Z_ohm
         else:
-            self.admittance = complex(0, 0)
+            self.admittance = complex(1e-12, 1e-12)
     
     def get_admittance_pu(self, base_mva: float = 100.0) -> complex:
         """
@@ -499,7 +498,7 @@ class LoadShunt(ShuntElement):
         if self.voltage_kv > 0:
             self.admittance = complex(self.p_mw, -self.q_mvar) / (self.voltage_kv ** 2)
         else:
-            self.admittance = complex(0, 0)
+            self.admittance = complex(1e-12, 1e-12)
     
     def update_admittance_with_lf_voltage(self) -> None:
         """
@@ -538,7 +537,8 @@ class GeneratorShunt(ShuntElement):
             x_ohms = self.xdss_pu * z_base
             self.admittance = complex(0, -1 / x_ohms)
         else:
-            self.admittance = complex(0, 0)
+            # Use small non-zero value to avoid numerical instabilities in matrix reduction
+            self.admittance = complex(1e-12, -1e-12)
 
 
 @dataclass
@@ -568,7 +568,8 @@ class ExternalGridShunt(ShuntElement):
             z_complex = complex(r_sc, x_sc)
             self.admittance = 1 / z_complex
         else:
-            self.admittance = complex(0, 0)
+            # Use small non-zero value to avoid numerical instabilities in matrix reduction
+            self.admittance = complex(1e-12, -1e-12)
 
 
 @dataclass

@@ -23,7 +23,7 @@ def init_project(app, project_path: str) -> bool:
     err = app.ActivateProject(project_path)
     return err == 0
 
-def get_simulation_data(GEN_OUT: str, path: str, available_measurements: Optional[List[str]] = None, pfResultsName: str = "All calculations") -> tuple:
+def get_simulation_data(GEN_OUT: str, path: str, available_measurements: Optional[List[str]] = None, pfResultsName: str = "All calculations", dist_index: int = 104) -> tuple:
     """
     Extract simulation data and optionally filter to available measurements.
     
@@ -36,6 +36,10 @@ def get_simulation_data(GEN_OUT: str, path: str, available_measurements: Optiona
     available_measurements : list of str, optional
         List of generator NAMES that have available measurements.
         If None, all generators are included.
+    pfResultsName : str, optional
+        Name of the PowerFactory results set (default is "All calculations") .ElmRes
+    dist_index : int, optional
+        Index of the disturbance in the data (default is 104)
     
     Returns:
     --------
@@ -57,8 +61,7 @@ def get_simulation_data(GEN_OUT: str, path: str, available_measurements: Optiona
         data[col] = data[col].str.replace(',', '.').astype(float)
 
     # Find the index of the first row where GEN_OUT hits its minimum value
-    min_index = int(data[GEN_OUT].idxmin())
-    min_index = 32 # We know the index from the simulation (as the min index is not always the first one)
+    min_index = dist_index - 2  # -2 because first and second row define DataObject and parameter description
     
     # Get values from all columns except the first column at the minimum index
     values_at_min_index = data.iloc[min_index - 1, 1:].values
