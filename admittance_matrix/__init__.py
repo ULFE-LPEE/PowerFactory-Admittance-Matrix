@@ -47,7 +47,7 @@ Using individual functions:
     Y, bus_idx = build_admittance_matrix(branches, shunts, bus_names)
 """
 
-__version__ = "0.1.0"
+__version__ = "0.1.1"
 __author__ = "PowerFactory User"
 
 # Core classes
@@ -76,16 +76,19 @@ from .matrices import (
     calculate_power_distribution_ratios,
 )
 
-# Power flow functions
-from .powerflow import (
+# PowerFactory adapter functions (new canonical location)
+from .adapters.powerfactory import (
     BusResult,
     GeneratorResult,
     VoltageSourceResult,
+    ExternalGridResult,
+    get_bus_full_name,
     get_network_elements,
     run_load_flow,
     get_load_flow_results,
     get_generator_data_from_pf,
     get_voltage_source_data_from_pf,
+    get_external_grid_data_from_pf,
 )
 
 # Utilities
@@ -123,12 +126,17 @@ __all__ = [
     'BusResult',
     'GeneratorResult',
     'VoltageSourceResult',
+    'ExternalGridResult',
     
-    # PowerFactory functions
+    # PowerFactory adapter functions
+    'get_bus_full_name',
     'get_network_elements',
     'run_load_flow',
     'get_load_flow_results',
     'get_generator_data_from_pf',
     'get_voltage_source_data_from_pf',
+    'get_external_grid_data_from_pf',
+    
+    # Utilities
     'init_project',
 ]

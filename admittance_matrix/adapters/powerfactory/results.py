@@ -4,6 +4,8 @@ Load flow and generator result classes.
 This module contains result data structures for:
 - Bus load flow results
 - Generator operating data and internal voltage calculations
+- Voltage source results
+- External grid results
 """
 
 from dataclasses import dataclass

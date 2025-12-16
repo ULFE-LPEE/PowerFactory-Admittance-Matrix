@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "admittance_matrix"
-version = "0.1.1"
+version = "0.1.2"
 description = "Python library for building admittance matrices from DIgSILENT PowerFactory networks"
 readme = "README.md"
 license = {text = "MIT"}
@@ -42,7 +42,3 @@ Repository = "https://github.com/valenciaga1231/PF_Admittance_Matrix"
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["admittance_matrix*"]
-
-[tool.pytest.ini_options]
-testpaths = ["tests"]
-python_files = ["test_*.py"]

@@ -12,9 +12,9 @@ from ..matrices.builder import build_admittance_matrix, get_unique_buses, Matrix
 from ..matrices.reducer import reduce_to_generator_internal_buses
 from ..matrices.analysis import calculate_power_distribution_ratios
 from ..matrices.diagnostics import diagnose_network, print_diagnostics
-from ..powerflow.extractor import get_network_elements
-from ..powerflow.solver import run_load_flow, get_load_flow_results, get_generator_data_from_pf, get_voltage_source_data_from_pf, get_external_grid_data_from_pf
-from ..powerflow.results import GeneratorResult, VoltageSourceResult, ExternalGridResult
+from ..adapters.powerfactory import get_network_elements
+from ..adapters.powerfactory import run_load_flow, get_load_flow_results, get_generator_data_from_pf, get_voltage_source_data_from_pf, get_external_grid_data_from_pf
+from ..adapters.powerfactory import GeneratorResult, VoltageSourceResult, ExternalGridResult
 
 
 class Network:

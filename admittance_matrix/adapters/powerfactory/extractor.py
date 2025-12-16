@@ -8,38 +8,14 @@ using cubicle-based connectivity.
 from typing import List
 import powerfactory as pf
 
-from ..core.elements import (
+from .naming import get_bus_full_name
+from ...core.elements import (
     BranchElement, ShuntElement,
     LineBranch, SwitchBranch, TransformerBranch, Transformer3WBranch,
     CommonImpedanceBranch, SeriesReactorBranch,
     LoadShunt, GeneratorShunt, ExternalGridShunt, VoltageSourceShunt,
     ShuntFilterShunt, ShuntFilterType
 )
-
-def get_bus_full_name(terminal) -> str:
-    """
-    Get the full bus name including substation prefix.
-    
-    Format: "SubstationName\\BusName" or just "BusName" if no substation.
-    
-    Args:
-        terminal: PowerFactory terminal object (ElmTerm)
-        
-    Returns:
-        Full bus name with substation prefix
-    """
-    try:
-        # Get the parent folder which is typically the substation (ElmSubstat)
-        parent = terminal.GetParent()
-        if parent is not None and hasattr(parent, 'loc_name'):
-            # Check if parent is a substation or site
-            class_name = parent.GetClassName() if hasattr(parent, 'GetClassName') else ""
-            if class_name in ('ElmSubstat', 'ElmSite', 'ElmTrfstat'):
-                return f"{parent.loc_name}_{terminal.loc_name}"
-        # Fallback to just the terminal name
-        return terminal.loc_name
-    except Exception:
-        return terminal.loc_name
 
 
 def get_network_elements(app) -> tuple[list[BranchElement], list[ShuntElement], list[Transformer3WBranch]]:
@@ -128,7 +104,6 @@ def get_network_elements(app) -> tuple[list[BranchElement], list[ShuntElement], 
                 continue
             # Check if buses are energized
             if from_bus.IsEnergized() != 1 or to_bus.IsEnergized() != 1:
-                # print(f"[WARNING] Switch '{switch.loc_name}': Bus(es) de-energized, skipping")
                 continue
         except Exception as e:
             print(f"[ERROR] Switch '{switch.loc_name}': Failed to get cubicle/terminal - {type(e).__name__}: {e}")
@@ -198,8 +173,6 @@ def get_network_elements(app) -> tuple[list[BranchElement], list[ShuntElement], 
             x_pu = ((uk_percent ** 2 - ur_percent ** 2) ** 0.5) / 100.0
         
         # Get tap position and calculate tap ratio
-        # nntap = current tap position, ntpmn/ntpmx = min/max tap positions
-        # dutap = voltage change per tap step (%)
         tap_pos = trafo.nntap if hasattr(trafo, 'nntap') else 0
         tap_neutral = pf_type.ntpm if hasattr(pf_type, 'ntpm') else 0
         dutap = pf_type.dutap if hasattr(pf_type, 'dutap') else 0.0
@@ -208,7 +181,6 @@ def get_network_elements(app) -> tuple[list[BranchElement], list[ShuntElement], 
         tap_ratio = 1.0 + (tap_pos - tap_neutral) * dutap / 100.0
         
         # Determine tap side (0 = HV, 1 = LV)
-        # In PowerFactory, tap_side attribute or default to HV
         tap_side = pf_type.tap_side if hasattr(pf_type, 'tap_side') else 0
         
         # Number of parallel transformers
@@ -265,14 +237,14 @@ def get_network_elements(app) -> tuple[list[BranchElement], list[ShuntElement], 
         lv_kv = to_bus.uknom
         
         # Get impedance from PowerFactory (returns [R, X] in Ohms at specified voltage)
-        imp_pf = zpu.GetImpedance(hv_kv) # Return imepedance in Ohms (based on documentation)
+        imp_pf = zpu.GetImpedance(hv_kv)
         if (imp_pf[0] == 1):
             print(f"[WARNING] Common Impedance '{zpu.loc_name}': Error obtaining impedance, skipping")
             continue
         R_ohm = imp_pf[1]
         X_ohm = imp_pf[2]
         
-        # Get rated power (if available) - ElmZpu may have Sn attribute
+        # Get rated power (if available)
         rated_mva = getattr(zpu, 'Sn', 0.0) or 0.0
         
         branches.append(CommonImpedanceBranch(
@@ -280,7 +252,7 @@ def get_network_elements(app) -> tuple[list[BranchElement], list[ShuntElement], 
             name=zpu.loc_name,
             from_bus_name=get_bus_full_name(from_bus),
             to_bus_name=get_bus_full_name(to_bus),
-            voltage_kv=hv_kv,  # Use from-bus voltage as reference
+            voltage_kv=hv_kv,
             resistance_ohm=R_ohm,
             reactance_ohm=X_ohm,
             hv_kv=hv_kv,
@@ -321,8 +293,8 @@ def get_network_elements(app) -> tuple[list[BranchElement], list[ShuntElement], 
         # Get voltage level from terminal
         voltage_kv = from_bus.uknom
         
-        # Get impedance from PowerFactory (returns [R, X] in Ohms at specified voltage)
-        imp_pf = sind.GetImpedance(voltage_kv) # Return imepedance in Ohms (based on documentation)
+        # Get impedance from PowerFactory
+        imp_pf = sind.GetImpedance(voltage_kv)
         if (imp_pf[0] == 1):
             print(f"[WARNING] Series Reactor '{sind.loc_name}': Error obtaining impedance, skipping")
             continue
@@ -450,9 +422,9 @@ def get_network_elements(app) -> tuple[list[BranchElement], list[ShuntElement], 
             continue
         
         # Get short-circuit parameters
-        s_sc = xnet.snss if hasattr(xnet, 'snss') else 0.0  # Short-circuit power [MVA]
-        c_factor = xnet.cfac if hasattr(xnet, 'cfac') else 1.0  # Voltage factor
-        r_x_ratio = xnet.rntxn if hasattr(xnet, 'rntxn') else 0.1  # R/X ratio
+        s_sc = xnet.snss if hasattr(xnet, 'snss') else 0.0
+        c_factor = xnet.cfac if hasattr(xnet, 'cfac') else 1.0
+        r_x_ratio = xnet.rntxn if hasattr(xnet, 'rntxn') else 0.1
         
         shunts.append(ExternalGridShunt(
             pf_object=xnet,
@@ -531,8 +503,8 @@ def get_network_elements(app) -> tuple[list[BranchElement], list[ShuntElement], 
             print(f"[ERROR] Shunt Filter '{shnt.loc_name}': Failed to get cubicle/terminal - {type(e).__name__}: {e}")
             continue
         
-        # Get filter type (shtype attribute: 0=R_L_C, 1=R_L, 2=C, 3=R_L_C_Rp, 4=R_L_C1_C2_Rp)
-        shtype = getattr(shnt, 'shtype', 2) or 2  # Default to C (capacitor)
+        # Get filter type
+        shtype = getattr(shnt, 'shtype', 2) or 2
         try:
             filter_type = ShuntFilterType(shtype)
         except ValueError:
@@ -550,17 +522,15 @@ def get_network_elements(app) -> tuple[list[BranchElement], list[ShuntElement], 
             n_rea = 1.0
         
         # Get R-L-C parameters (per step)
-        bcap_us = getattr(shnt, 'bcap', 0.0) or 0.0      # Capacitor susceptance [µS]
-        xrea_ohm = getattr(shnt, 'xrea', 0.0) or 0.0    # Reactor reactance [Ohm]
-        rrea_ohm = getattr(shnt, 'rrea', 0.0) or 0.0    # Reactor resistance [Ohm]
-        gparac_us = getattr(shnt, 'gparac', 0.0) or 0.0  # Parallel conductance [µS]
+        bcap_us = getattr(shnt, 'bcap', 0.0) or 0.0
+        xrea_ohm = getattr(shnt, 'xrea', 0.0) or 0.0
+        rrea_ohm = getattr(shnt, 'rrea', 0.0) or 0.0
+        gparac_us = getattr(shnt, 'gparac', 0.0) or 0.0
 
-        print(f"Shunt Filter '{shnt.loc_name}': bcap={bcap_us} µS, xrea={xrea_ohm} Ohm, rrea={rrea_ohm} Ohm, gparac={gparac_us} µS")
-        
         # High-pass filter parameters
-        c1_uf = getattr(shnt, 'c1', 0.0) or 0.0         # Series capacitor C1 [µF]
-        c2_uf = getattr(shnt, 'c2', 0.0) or 0.0         # Parallel capacitor C2 [µF]
-        rpara_ohm = getattr(shnt, 'rpara', 0.0) or 0.0  # Parallel resistance [Ohm]
+        c1_uf = getattr(shnt, 'c1', 0.0) or 0.0
+        c2_uf = getattr(shnt, 'c2', 0.0) or 0.0
+        rpara_ohm = getattr(shnt, 'rpara', 0.0) or 0.0
         
         shunts.append(ShuntFilterShunt(
             pf_object=shnt,
@@ -577,7 +547,7 @@ def get_network_elements(app) -> tuple[list[BranchElement], list[ShuntElement], 
             c1_uf=c1_uf,
             c2_uf=c2_uf,
             rpara_ohm=rpara_ohm,
-            f_sys=50.0  # System frequency
+            f_sys=50.0
         ))
 
     # --- Three-winding Transformers (ElmTr3) ---
@@ -612,7 +582,7 @@ def get_network_elements(app) -> tuple[list[BranchElement], list[ShuntElement], 
             print(f"[ERROR] 3W Transformer '{trafo.loc_name}': Failed to get cubicle/terminal - {type(e).__name__}: {e}")
             continue
         
-        # Get transformer type data for optional reference values
+        # Get transformer type data
         pf_type = trafo.GetAttribute("typ_id")
         rated_mva = 0.0
         hv_kv = 0.0
@@ -624,18 +594,16 @@ def get_network_elements(app) -> tuple[list[BranchElement], list[ShuntElement], 
             mv_kv = pf_type.utrn3_m if hasattr(pf_type, 'utrn3_m') else 0.0
             lv_kv = pf_type.utrn3_l if hasattr(pf_type, 'utrn3_l') else 0.0
         
-        # Number of parallel transformers (if applicable)
+        # Number of parallel transformers
         n_parallel = getattr(trafo, 'ntnum', 1) or 1
         
-        # The Transformer3WBranch uses PowerFactory's GetZpu() method directly
-        # to retrieve properly scaled impedances on system base
         transformers_3w.append(Transformer3WBranch(
             pf_object=trafo,
             name=trafo.loc_name,
             hv_bus_name=get_bus_full_name(hv_bus),
             mv_bus_name=get_bus_full_name(mv_bus),
             lv_bus_name=get_bus_full_name(lv_bus),
-            base_mva=100.0,  # System base
+            base_mva=100.0,
             n_parallel=n_parallel,
             rated_power_mva=rated_mva,
             hv_kv=hv_kv,

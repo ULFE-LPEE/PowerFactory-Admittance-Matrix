@@ -7,9 +7,9 @@ retrieve results from PowerFactory.
 
 import cmath
 
-from admittance_matrix.powerflow.extractor import get_bus_full_name
+from .naming import get_bus_full_name
 from .results import BusResult, GeneratorResult, VoltageSourceResult, ExternalGridResult
-from ..core.elements import ShuntElement, GeneratorShunt, VoltageSourceShunt, ExternalGridShunt
+from ...core.elements import ShuntElement, GeneratorShunt, VoltageSourceShunt, ExternalGridShunt
 
 
 def _calculate_internal_voltage(
@@ -216,8 +216,6 @@ def get_voltage_source_data_from_pf(
     Returns:
         List of VoltageSourceResult objects
     """
-    import cmath
-    
     results: list[VoltageSourceResult] = []
     
     # Get all AC voltage sources from PowerFactory
@@ -297,8 +295,6 @@ def get_external_grid_data_from_pf(
     Returns:
         List of ExternalGridResult objects
     """
-    import cmath
-    
     results: list[ExternalGridResult] = []
     
     # Get all external grids from PowerFactory

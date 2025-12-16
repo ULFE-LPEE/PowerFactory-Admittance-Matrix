@@ -7,7 +7,7 @@ including power distribution ratio calculations.
 
 import numpy as np
 from typing import Union
-from ..powerflow.results import GeneratorResult, VoltageSourceResult
+from ..adapters.powerfactory import GeneratorResult, VoltageSourceResult
 
 # Type alias for source data
 SourceData = Union[GeneratorResult, VoltageSourceResult]
