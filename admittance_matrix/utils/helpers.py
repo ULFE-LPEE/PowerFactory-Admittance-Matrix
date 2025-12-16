@@ -9,7 +9,7 @@ import time
 import powerfactory as pf
 from powerfactory import DataObject
 
-def init_project(app, project_path: str) -> bool:
+def init_project(app: pf.Application, project_path: str) -> bool:
     """
     Initialize a PowerFactory project.
     
@@ -184,7 +184,7 @@ def obtain_rms_results(app: pf.Application, filesPath: str, pfResultsName: str =
         new_event = eventFolder.CreateObject("EvtSwitch")
         new_event.SetAttribute("loc_name", gen_name+"_izpad")
         new_event.SetAttribute("p_target", gen)
-        new_event.SetAttribute("time", 0.3)
+        new_event.SetAttribute("time", 0.1)
         created_events.append(new_event)
 
         # ====== 2. We run the simulation
@@ -192,16 +192,16 @@ def obtain_rms_results(app: pf.Application, filesPath: str, pfResultsName: str =
         oInit = app.GetFromStudyCase('ComInc')  # Get initial condition calculation object
         timeUnit = oInit.GetAttributeUnit("dtgrd") # Set to calculate initial conditions
         if timeUnit == "s": # If not in ms
-            oInit.SetAttribute("dtgrd", 0.01) # Set to 10 ms
+            oInit.SetAttribute("dtgrd", 0.001) # Set to 10 ms
         if timeUnit == "ms": # If not in ms
-            oInit.SetAttribute("dtgrd", 10) # Set sim step to 10 ms
+            oInit.SetAttribute("dtgrd", 1) # Set sim step to 10 ms
         # oInit.SetAttribute("dtgrd", 1) # Set sim step to 1 ms
         oInit.SetAttribute("tstart", 0) # Set sim start time to 0 ms
         oInit.Execute() # type: ignore
 
         # Run RMS-simulation
         oRms = app.GetFromStudyCase('ComSim')   # Get RMS-simulation object
-        oRms.SetAttribute("tstop", 0.35)  # Set simulation time to 0.5 seconds
+        oRms.SetAttribute("tstop", 0.15)  # Set simulation time to 0.5 seconds
         oRms.Execute() # type: ignore
 
         # ====== 3. We delete the current event if it exists
