@@ -94,6 +94,7 @@ from .adapters.powerfactory import (
 # Utilities
 from .utils import (
     init_project,
+    import_pfd_file,
 )
 
 __all__ = [
@@ -139,4 +140,5 @@ __all__ = [
     
     # Utilities
     'init_project',
+    'import_pfd_file',
 ]

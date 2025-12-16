@@ -41,7 +41,7 @@ import pandas as pd
 
 # Connect to PowerFactory
 app = pf.GetApplicationExt()
-init_project(app, "Lokalizacija\\11_bus_radial_system")
+init_project(app, "Lokalizacija\\11_bus_radial_system") # Enter your PF project path here
 
 # Initialize network and build matrices
 net = Network(app, base_mva=100.0)
@@ -62,23 +62,20 @@ pd.DataFrame(Y_loadflow, index=net.bus_names, columns=net.bus_names)
 
 ```
 admittance_matrix/
+├── adapters/
+│   └── powerfactory/     # PowerFactory-specific code
+│       ├── extractor.py  # Network element extraction
+│       ├── loadflow.py   # Load flow execution & results
+│       ├── naming.py     # Bus naming utilities
+│       └── results.py    # Result dataclasses
 ├── core/
 │   ├── elements.py       # BranchElement, ShuntElement classes
 │   └── network.py        # High-level Network wrapper
 ├── matrices/
 │   ├── builder.py        # build_admittance_matrix()
 │   ├── reducer.py        # Kron reduction functions
-│   └── analysis.py       # Power distribution ratio calculations
-├── powerflow/
-│   ├── results.py        # Result dataclasses
-│   ├── extractor.py      # Network element extraction
-│   └── solver.py         # Load flow interface
+│   ├── analysis.py       # Power distribution ratio calculations
+│   └── diagnostics.py    # Network diagnostics
 └── utils/
     └── helpers.py        # Utility functions
 ```
-
-## Requirements
-
-- Python 3.10+
-- NumPy
-- DIgSILENT PowerFactory
