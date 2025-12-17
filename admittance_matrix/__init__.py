@@ -45,9 +45,26 @@ Using individual functions:
     
     # Build matrix
     Y, bus_idx = build_admittance_matrix(branches, shunts, bus_names)
+
+Logging
+-------
+This library uses Python's standard logging module. By default, no output is shown.
+To enable logging:
+
+    import logging
+    logging.getLogger("admittance_matrix").setLevel(logging.INFO)
+    
+For detailed debug output:
+
+    logging.getLogger("admittance_matrix").setLevel(logging.DEBUG)
 """
 
+import logging
+
 __version__ = "0.1.1"
+
+# Configure library logging (NullHandler prevents "No handler found" warnings)
+logging.getLogger(__name__).addHandler(logging.NullHandler())
 __author__ = "PowerFactory User"
 
 # Core classes

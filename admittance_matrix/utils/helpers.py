@@ -1,6 +1,7 @@
 """
 Utility functions for PowerFactory operations.
 """
+import logging
 from typing import Optional, List
 import numpy as np
 import pandas as pd
@@ -8,6 +9,8 @@ import os
 import time
 import powerfactory as pf
 from powerfactory import DataObject
+
+logger = logging.getLogger(__name__)
 
 def init_project(app: pf.Application, project_path: str) -> bool:
     """
@@ -122,11 +125,11 @@ def obtain_rms_results(app: pf.Application, filesPath: str, pfResultsName: str =
     # Get the ElmRes object
     elmRes = app.GetCalcRelevantObjects(f"*{pfResultsName}.ElmRes")[0]
     # elmRes = app.GetCalcRelevantObjects("*I.ElmRes")[0]
-    print("Ime Rezultatov: ", elmRes.GetAttribute("loc_name"))
+    logger.debug(f"Results object: {elmRes.GetAttribute('loc_name')}")
     
     # Get all generators
     all_generators = app.GetCalcRelevantObjects("*.ElmSym", 1, 1, 1)
-    print("All generators: ", len(all_generators))
+    logger.debug(f"All generators found: {len(all_generators)}")
     generators: List[DataObject] = []
     for gen in all_generators:
         if gen.GetAttribute("outserv") == 1:
@@ -134,11 +137,11 @@ def obtain_rms_results(app: pf.Application, filesPath: str, pfResultsName: str =
         if gen.IsEnergized() != 1:
             continue
         generators.append(gen)
-    print("Generators: ", [gen.GetAttribute("loc_name") for gen in generators])
+    logger.debug(f"Active generators: {[gen.GetAttribute('loc_name') for gen in generators]}")
 
     # Get all voltage sources (ElmVac) - these will be monitored but not tripped
     all_voltage_sources = app.GetCalcRelevantObjects("*.ElmVac", 1, 1, 1)
-    print("All voltage sources: ", len(all_voltage_sources))
+    logger.debug(f"All voltage sources found: {len(all_voltage_sources)}")
     voltage_sources: List[DataObject] = []
     for vac in all_voltage_sources:
         if vac.GetAttribute("outserv") == 1:
@@ -146,11 +149,11 @@ def obtain_rms_results(app: pf.Application, filesPath: str, pfResultsName: str =
         if vac.IsEnergized() != 1:
             continue
         voltage_sources.append(vac)
-    print("Voltage sources: ", [vac.GetAttribute("loc_name") for vac in voltage_sources])
+    logger.debug(f"Active voltage sources: {[vac.GetAttribute('loc_name') for vac in voltage_sources]}")
 
     # Get all external grids (ElmXnet) - these will be monitored but not tripped
     all_external_grids = app.GetCalcRelevantObjects("*.ElmXnet", 1, 1, 1)
-    print("All external grids: ", len(all_external_grids))
+    logger.debug(f"All external grids found: {len(all_external_grids)}")
     external_grids: List[DataObject] = []
     for xnet in all_external_grids:
         if xnet.GetAttribute("outserv") == 1:
@@ -158,7 +161,7 @@ def obtain_rms_results(app: pf.Application, filesPath: str, pfResultsName: str =
         if xnet.IsEnergized() != 1:
             continue
         external_grids.append(xnet)
-    print("External grids: ", [xnet.GetAttribute("loc_name") for xnet in external_grids])
+    logger.debug(f"Active external grids: {[xnet.GetAttribute('loc_name') for xnet in external_grids]}")
 
     # Setup monitoring for generators
     for gen in generators:
@@ -203,7 +206,7 @@ def obtain_rms_results(app: pf.Application, filesPath: str, pfResultsName: str =
         iteration += 1
 
         gen_name = gen.GetAttribute("loc_name")
-        print(f"Processing generator outage for generator nr. {iteration}: {gen_name}")
+        logger.info(f"Processing generator outage {iteration}: {gen_name}")
 
         # ====== 1. We define the SwitchEvent (only for generators)
         new_event = eventFolder.CreateObject("EvtSwitch")
@@ -235,7 +238,7 @@ def obtain_rms_results(app: pf.Application, filesPath: str, pfResultsName: str =
             if deleted == 0:
                 pass
             else:
-                print("Failed to delete event: ", previous_event.GetAttribute("loc_name"))
+                logger.warning(f"Failed to delete event: {previous_event.GetAttribute('loc_name')}")
         new_event.SetAttribute("outserv", 1)
 
         # ====== 4. We get the results

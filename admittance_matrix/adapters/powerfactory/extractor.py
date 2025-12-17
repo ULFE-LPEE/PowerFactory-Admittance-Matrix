@@ -5,6 +5,7 @@ This module provides functions to extract network elements from PowerFactory
 using cubicle-based connectivity.
 """
 
+import logging
 from typing import List
 import powerfactory as pf
 
@@ -16,6 +17,8 @@ from ...core.elements import (
     LoadShunt, GeneratorShunt, ExternalGridShunt, VoltageSourceShunt,
     ShuntFilterShunt, ShuntFilterType
 )
+
+logger = logging.getLogger(__name__)
 
 
 def get_network_elements(app) -> tuple[list[BranchElement], list[ShuntElement], list[Transformer3WBranch]]:
@@ -48,19 +51,19 @@ def get_network_elements(app) -> tuple[list[BranchElement], list[ShuntElement], 
             cub0 = line.GetCubicle(0)
             cub1 = line.GetCubicle(1)
             if cub0 is None or cub1 is None:
-                print(f"[WARNING] Line '{line.loc_name}': Missing cubicle(s), skipping")
+                logger.info(f" Line '{line.loc_name}': Missing cubicle(s), skipping")
                 continue
             from_bus = cub0.cterm
             to_bus = cub1.cterm
             if from_bus is None or to_bus is None:
-                print(f"[WARNING] Line '{line.loc_name}': Missing terminal(s) (cterm is None), skipping")
+                logger.info(f" Line '{line.loc_name}': Missing terminal(s) (cterm is None), skipping")
                 continue
             # Check if buses are energized
             if from_bus.IsEnergized() != 1 or to_bus.IsEnergized() != 1:
-                print(f"[WARNING] Line '{line.loc_name}': Bus(es) de-energized, skipping")
+                logger.info(f" Line '{line.loc_name}': Bus(es) de-energized, skipping")
                 continue
         except Exception as e:
-            print(f"[ERROR] Line '{line.loc_name}': Failed to get cubicle/terminal - {type(e).__name__}: {e}")
+            logger.warning(f" Line '{line.loc_name}': Failed to get cubicle/terminal - {type(e).__name__}: {e}")
             continue
         
         # Extract line parameters
@@ -95,18 +98,18 @@ def get_network_elements(app) -> tuple[list[BranchElement], list[ShuntElement], 
             cub0 = switch.GetCubicle(0)
             cub1 = switch.GetCubicle(1)
             if cub0 is None or cub1 is None:
-                print(f"[WARNING] Switch '{switch.loc_name}': Missing cubicle(s), skipping")
+                logger.info(f" Switch '{switch.loc_name}': Missing cubicle(s), skipping")
                 continue
             from_bus = cub0.cterm
             to_bus = cub1.cterm
             if from_bus is None or to_bus is None:
-                print(f"[WARNING] Switch '{switch.loc_name}': Missing terminal(s) (cterm is None), skipping")
+                logger.info(f" Switch '{switch.loc_name}': Missing terminal(s) (cterm is None), skipping")
                 continue
             # Check if buses are energized
             if from_bus.IsEnergized() != 1 or to_bus.IsEnergized() != 1:
                 continue
         except Exception as e:
-            print(f"[ERROR] Switch '{switch.loc_name}': Failed to get cubicle/terminal - {type(e).__name__}: {e}")
+            logger.warning(f" Switch '{switch.loc_name}': Failed to get cubicle/terminal - {type(e).__name__}: {e}")
             continue
         
         is_closed = not (hasattr(switch, 'on_off') and switch.on_off == 0)
@@ -135,25 +138,25 @@ def get_network_elements(app) -> tuple[list[BranchElement], list[ShuntElement], 
             cub0 = trafo.GetCubicle(0)
             cub1 = trafo.GetCubicle(1)
             if cub0 is None or cub1 is None:
-                print(f"[WARNING] Transformer '{trafo.loc_name}': Missing cubicle(s), skipping")
+                logger.info(f" Transformer '{trafo.loc_name}': Missing cubicle(s), skipping")
                 continue
             hv_bus = cub0.cterm
             lv_bus = cub1.cterm
             if hv_bus is None or lv_bus is None:
-                print(f"[WARNING] Transformer '{trafo.loc_name}': Missing terminal(s) (cterm is None), skipping")
+                logger.info(f" Transformer '{trafo.loc_name}': Missing terminal(s) (cterm is None), skipping")
                 continue
             # Check if buses are energized
             if hv_bus.IsEnergized() != 1 or lv_bus.IsEnergized() != 1:
-                print(f"[WARNING] Transformer '{trafo.loc_name}': Bus(es) de-energized, skipping")
+                logger.info(f" Transformer '{trafo.loc_name}': Bus(es) de-energized, skipping")
                 continue
         except Exception as e:
-            print(f"[ERROR] Transformer '{trafo.loc_name}': Failed to get cubicle/terminal - {type(e).__name__}: {e}")
+            logger.warning(f" Transformer '{trafo.loc_name}': Failed to get cubicle/terminal - {type(e).__name__}: {e}")
             continue
         
         # Get transformer type data
         pf_type = trafo.GetAttribute("typ_id")
         if pf_type is None:
-            print(f"[WARNING] Transformer '{trafo.loc_name}': No type data (typ_id is None), skipping")
+            logger.warning(f" Transformer '{trafo.loc_name}': No type data (typ_id is None), skipping")
             continue
         
         # Rated values from type
@@ -217,19 +220,19 @@ def get_network_elements(app) -> tuple[list[BranchElement], list[ShuntElement], 
             cub0 = zpu.GetCubicle(0)
             cub1 = zpu.GetCubicle(1)
             if cub0 is None or cub1 is None:
-                print(f"[WARNING] Common Impedance '{zpu.loc_name}': Missing cubicle(s), skipping")
+                logger.info(f" Common Impedance '{zpu.loc_name}': Missing cubicle(s), skipping")
                 continue
             from_bus = cub0.cterm
             to_bus = cub1.cterm
             if from_bus is None or to_bus is None:
-                print(f"[WARNING] Common Impedance '{zpu.loc_name}': Missing terminal(s) (cterm is None), skipping")
+                logger.info(f" Common Impedance '{zpu.loc_name}': Missing terminal(s) (cterm is None), skipping")
                 continue
             # Check if buses are energized
             if from_bus.IsEnergized() != 1 or to_bus.IsEnergized() != 1:
-                print(f"[WARNING] Common Impedance '{zpu.loc_name}': Bus(es) de-energized, skipping")
+                logger.info(f" Common Impedance '{zpu.loc_name}': Bus(es) de-energized, skipping")
                 continue
         except Exception as e:
-            print(f"[ERROR] Common Impedance '{zpu.loc_name}': Failed to get cubicle/terminal - {type(e).__name__}: {e}")
+            logger.warning(f" Common Impedance '{zpu.loc_name}': Failed to get cubicle/terminal - {type(e).__name__}: {e}")
             continue
         
         # Get voltage levels from terminals
@@ -239,7 +242,7 @@ def get_network_elements(app) -> tuple[list[BranchElement], list[ShuntElement], 
         # Get impedance from PowerFactory (returns [R, X] in Ohms at specified voltage)
         imp_pf = zpu.GetImpedance(hv_kv)
         if (imp_pf[0] == 1):
-            print(f"[WARNING] Common Impedance '{zpu.loc_name}': Error obtaining impedance, skipping")
+            logger.warning(f" Common Impedance '{zpu.loc_name}': Error obtaining impedance, skipping")
             continue
         R_ohm = imp_pf[1]
         X_ohm = imp_pf[2]
@@ -275,19 +278,19 @@ def get_network_elements(app) -> tuple[list[BranchElement], list[ShuntElement], 
             cub0 = sind.GetCubicle(0)
             cub1 = sind.GetCubicle(1)
             if cub0 is None or cub1 is None:
-                print(f"[WARNING] Series Reactor '{sind.loc_name}': Missing cubicle(s), skipping")
+                logger.info(f" Series Reactor '{sind.loc_name}': Missing cubicle(s), skipping")
                 continue
             from_bus = cub0.cterm
             to_bus = cub1.cterm
             if from_bus is None or to_bus is None:
-                print(f"[WARNING] Series Reactor '{sind.loc_name}': Missing terminal(s) (cterm is None), skipping")
+                logger.info(f" Series Reactor '{sind.loc_name}': Missing terminal(s) (cterm is None), skipping")
                 continue
             # Check if buses are energized
             if from_bus.IsEnergized() != 1 or to_bus.IsEnergized() != 1:
-                print(f"[WARNING] Series Reactor '{sind.loc_name}': Bus(es) de-energized, skipping")
+                logger.info(f" Series Reactor '{sind.loc_name}': Bus(es) de-energized, skipping")
                 continue
         except Exception as e:
-            print(f"[ERROR] Series Reactor '{sind.loc_name}': Failed to get cubicle/terminal - {type(e).__name__}: {e}")
+            logger.warning(f" Series Reactor '{sind.loc_name}': Failed to get cubicle/terminal - {type(e).__name__}: {e}")
             continue
         
         # Get voltage level from terminal
@@ -296,7 +299,7 @@ def get_network_elements(app) -> tuple[list[BranchElement], list[ShuntElement], 
         # Get impedance from PowerFactory
         imp_pf = sind.GetImpedance(voltage_kv)
         if (imp_pf[0] == 1):
-            print(f"[WARNING] Series Reactor '{sind.loc_name}': Error obtaining impedance, skipping")
+            logger.warning(f" Series Reactor '{sind.loc_name}': Error obtaining impedance, skipping")
             continue
         R_ohm = imp_pf[1]
         X_ohm = imp_pf[2]
@@ -328,18 +331,18 @@ def get_network_elements(app) -> tuple[list[BranchElement], list[ShuntElement], 
         try:
             cub0 = gen.GetCubicle(0)
             if cub0 is None:
-                print(f"[WARNING] Generator '{gen.loc_name}': Missing cubicle, skipping")
+                logger.info(f" Generator '{gen.loc_name}': Missing cubicle, skipping")
                 continue
             bus = cub0.cterm
             if bus is None:
-                print(f"[WARNING] Generator '{gen.loc_name}': Missing terminal (cterm is None), skipping")
+                logger.info(f" Generator '{gen.loc_name}': Missing terminal (cterm is None), skipping")
                 continue
             # Check if bus is energized
             if bus.IsEnergized() != 1:
-                print(f"[WARNING] Generator '{gen.loc_name}': Bus de-energized, skipping")
+                logger.info(f" Generator '{gen.loc_name}': Bus de-energized, skipping")
                 continue
         except Exception as e:
-            print(f"[ERROR] Generator '{gen.loc_name}': Failed to get cubicle/terminal - {type(e).__name__}: {e}")
+            logger.warning(f" Generator '{gen.loc_name}': Failed to get cubicle/terminal - {type(e).__name__}: {e}")
             continue
         
         pf_type = gen.GetAttribute("typ_id")
@@ -371,18 +374,18 @@ def get_network_elements(app) -> tuple[list[BranchElement], list[ShuntElement], 
         try:
             cub0 = load.GetCubicle(0)
             if cub0 is None:
-                print(f"[WARNING] Load '{load.loc_name}': Missing cubicle, skipping")
+                logger.info(f" Load '{load.loc_name}': Missing cubicle, skipping")
                 continue
             bus = cub0.cterm
             if bus is None:
-                print(f"[WARNING] Load '{load.loc_name}': Missing terminal (cterm is None), skipping")
+                logger.info(f" Load '{load.loc_name}': Missing terminal (cterm is None), skipping")
                 continue
             # Check if bus is energized
             if bus.IsEnergized() != 1:
-                print(f"[WARNING] Load '{load.loc_name}': Bus de-energized, skipping")
+                logger.info(f" Load '{load.loc_name}': Bus de-energized, skipping")
                 continue
         except Exception as e:
-            print(f"[ERROR] Load '{load.loc_name}': Failed to get cubicle/terminal - {type(e).__name__}: {e}")
+            logger.warning(f" Load '{load.loc_name}': Failed to get cubicle/terminal - {type(e).__name__}: {e}")
             continue
         
         shunts.append(LoadShunt(
@@ -407,18 +410,18 @@ def get_network_elements(app) -> tuple[list[BranchElement], list[ShuntElement], 
         try:
             cub0 = xnet.GetCubicle(0)
             if cub0 is None:
-                print(f"[WARNING] External Grid '{xnet.loc_name}': Missing cubicle, skipping")
+                logger.info(f" External Grid '{xnet.loc_name}': Missing cubicle, skipping")
                 continue
             bus = cub0.cterm
             if bus is None:
-                print(f"[WARNING] External Grid '{xnet.loc_name}': Missing terminal (cterm is None), skipping")
+                logger.info(f" External Grid '{xnet.loc_name}': Missing terminal (cterm is None), skipping")
                 continue
             # Check if bus is energized
             if bus.IsEnergized() != 1:
-                print(f"[WARNING] External Grid '{xnet.loc_name}': Bus de-energized, skipping")
+                logger.info(f" External Grid '{xnet.loc_name}': Bus de-energized, skipping")
                 continue
         except Exception as e:
-            print(f"[ERROR] External Grid '{xnet.loc_name}': Failed to get cubicle/terminal - {type(e).__name__}: {e}")
+            logger.warning(f" External Grid '{xnet.loc_name}': Failed to get cubicle/terminal - {type(e).__name__}: {e}")
             continue
         
         # Get short-circuit parameters
@@ -449,18 +452,18 @@ def get_network_elements(app) -> tuple[list[BranchElement], list[ShuntElement], 
         try:
             cub0 = vac.GetCubicle(0)
             if cub0 is None:
-                print(f"[WARNING] AC Voltage Source '{vac.loc_name}': Missing cubicle, skipping")
+                logger.info(f" AC Voltage Source '{vac.loc_name}': Missing cubicle, skipping")
                 continue
             bus = cub0.cterm
             if bus is None:
-                print(f"[WARNING] AC Voltage Source '{vac.loc_name}': Missing terminal (cterm is None), skipping")
+                logger.info(f" AC Voltage Source '{vac.loc_name}': Missing terminal (cterm is None), skipping")
                 continue
             # Check if bus is energized
             if bus.IsEnergized() != 1:
-                print(f"[WARNING] AC Voltage Source '{vac.loc_name}': Bus de-energized, skipping")
+                logger.info(f" AC Voltage Source '{vac.loc_name}': Bus de-energized, skipping")
                 continue
         except Exception as e:
-            print(f"[ERROR] AC Voltage Source '{vac.loc_name}': Failed to get cubicle/terminal - {type(e).__name__}: {e}")
+            logger.warning(f" AC Voltage Source '{vac.loc_name}': Failed to get cubicle/terminal - {type(e).__name__}: {e}")
             continue
         
         # Get R and X values (in ohms)
@@ -489,18 +492,18 @@ def get_network_elements(app) -> tuple[list[BranchElement], list[ShuntElement], 
         try:
             cub0 = shnt.GetCubicle(0)
             if cub0 is None:
-                print(f"[WARNING] Shunt Filter '{shnt.loc_name}': Missing cubicle, skipping")
+                logger.info(f" Shunt Filter '{shnt.loc_name}': Missing cubicle, skipping")
                 continue
             bus = cub0.cterm
             if bus is None:
-                print(f"[WARNING] Shunt Filter '{shnt.loc_name}': Missing terminal (cterm is None), skipping")
+                logger.info(f" Shunt Filter '{shnt.loc_name}': Missing terminal (cterm is None), skipping")
                 continue
             # Check if bus is energized
             if bus.IsEnergized() != 1:
-                print(f"[WARNING] Shunt Filter '{shnt.loc_name}': Bus de-energized, skipping")
+                logger.info(f" Shunt Filter '{shnt.loc_name}': Bus de-energized, skipping")
                 continue
         except Exception as e:
-            print(f"[ERROR] Shunt Filter '{shnt.loc_name}': Failed to get cubicle/terminal - {type(e).__name__}: {e}")
+            logger.warning(f" Shunt Filter '{shnt.loc_name}': Failed to get cubicle/terminal - {type(e).__name__}: {e}")
             continue
         
         # Get filter type
@@ -566,20 +569,20 @@ def get_network_elements(app) -> tuple[list[BranchElement], list[ShuntElement], 
             cub1 = trafo.GetCubicle(1)
             cub2 = trafo.GetCubicle(2)
             if cub0 is None or cub1 is None or cub2 is None:
-                print(f"[WARNING] 3W Transformer '{trafo.loc_name}': Missing cubicle(s), skipping")
+                logger.info(f" 3W Transformer '{trafo.loc_name}': Missing cubicle(s), skipping")
                 continue
             hv_bus = cub0.cterm
             mv_bus = cub1.cterm
             lv_bus = cub2.cterm
             if hv_bus is None or mv_bus is None or lv_bus is None:
-                print(f"[WARNING] 3W Transformer '{trafo.loc_name}': Missing terminal(s) (cterm is None), skipping")
+                logger.info(f" 3W Transformer '{trafo.loc_name}': Missing terminal(s) (cterm is None), skipping")
                 continue
             # Check if buses are energized
             if hv_bus.IsEnergized() != 1 or mv_bus.IsEnergized() != 1 or lv_bus.IsEnergized() != 1:
-                print(f"[WARNING] 3W Transformer '{trafo.loc_name}': Bus(es) de-energized, skipping")
+                logger.info(f" 3W Transformer '{trafo.loc_name}': Bus(es) de-energized, skipping")
                 continue
         except Exception as e:
-            print(f"[ERROR] 3W Transformer '{trafo.loc_name}': Failed to get cubicle/terminal - {type(e).__name__}: {e}")
+            logger.warning(f" 3W Transformer '{trafo.loc_name}': Failed to get cubicle/terminal - {type(e).__name__}: {e}")
             continue
         
         # Get transformer type data

@@ -5,7 +5,11 @@ This module provides functions to simplify network topology by merging
 buses connected by closed switches (zero-impedance connections).
 """
 
+import logging
+
 from ..core.elements import BranchElement, ShuntElement, SwitchBranch, Transformer3WBranch
+
+logger = logging.getLogger(__name__)
 
 
 class UnionFind:
@@ -114,8 +118,7 @@ def simplify_topology(
     n_merged_buses = len(set(bus_mapping.values()))
     n_switches_removed = len(closed_switches)
     
-    print(f"[Topology Simplification]")
-    print(f"  Closed switches removed: {n_switches_removed}")
-    print(f"  Buses merged: {n_original_buses} → {n_merged_buses} ({n_original_buses - n_merged_buses} eliminated)")
+    logger.info(f"Topology Simplification: {n_switches_removed} switches removed, "
+                f"{n_original_buses} → {n_merged_buses} buses ({n_original_buses - n_merged_buses} eliminated)")
     
     return filtered_branches, shunts, transformers_3w, bus_mapping

@@ -5,8 +5,12 @@ This module provides functions for reducing Y-matrices to specific buses,
 including generator internal bus reduction for stability analysis.
 """
 
+import logging
+
 import numpy as np
 from ..core.elements import ShuntElement, GeneratorShunt, VoltageSourceShunt, ExternalGridShunt
+
+logger = logging.getLogger(__name__)
 
 
 def kron_reduction(
@@ -138,11 +142,8 @@ def reduce_to_generator_internal_buses(
     source_bus_indices = [bus_idx[s.bus_name] for s in all_sources]
     source_admittances = np.array([s.get_admittance_pu(base_mva) for s in all_sources], dtype=complex)
 
-    print(f"Source reduction summary:")
-    print(f"  Generators: {len(generators)}")
-    print(f"  Voltage Sources: {len(voltage_sources)}")
-    print(f"  External Grids: {len(external_grids)}")
-    print(f"  Total sources: {n_sources}")
+    logger.info(f"Source reduction: {len(generators)} generators, {len(voltage_sources)} voltage sources, "
+                f"{len(external_grids)} external grids = {n_sources} total")
     
     # === Build extended Y-matrix ===
     # Copy Y_stab and add source admittances to their bus diagonals

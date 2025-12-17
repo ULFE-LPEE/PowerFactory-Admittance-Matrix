@@ -5,6 +5,8 @@ This module provides a high-level Network class that encapsulates all
 the functionality of the admittance_matrix library.
 """
 
+import logging
+
 import numpy as np
 import powerfactory as pf
 
@@ -17,7 +19,7 @@ from ..adapters.powerfactory import get_network_elements
 from ..adapters.powerfactory import run_load_flow, get_load_flow_results, get_generator_data_from_pf, get_voltage_source_data_from_pf, get_external_grid_data_from_pf
 from ..adapters.powerfactory import GeneratorResult, VoltageSourceResult, ExternalGridResult
 
-
+logger = logging.getLogger(__name__)
 class Network:
     """
     High-level wrapper for PowerFactory network analysis.
@@ -30,7 +32,7 @@ class Network:
     - Calculating power distribution ratios
     """
     
-    def __init__(self, app, base_mva: float = 100.0, simplify_topology: bool = False):
+    def __init__(self, app, base_mva: float = 100.0, simplify_topology: bool = False, verbose: bool = True):
         """
         Initialize the Network from a PowerFactory application.
         
@@ -38,6 +40,7 @@ class Network:
             app: PowerFactory application instance (already connected and with active project)
             base_mva: System base power in MVA (default 100)
             simplify_topology: If True, merge buses connected by closed switches (reduces bus count)
+            verbose: If True, print extraction summary to console (default True)
         """
         self.app: pf.Application = app
         self._hide()
@@ -45,6 +48,7 @@ class Network:
         # Network data
         self.base_mva = base_mva
         self.simplify_topology = simplify_topology
+        self.verbose = verbose
         self.bus_mapping = None  # Mapping from original to merged bus names
         self.branches = []
         self.shunts = []
@@ -75,6 +79,10 @@ class Network:
         """Extract network elements from PowerFactory."""
         self.branches, self.shunts, self.transformers_3w = get_network_elements(self.app)
         
+        # Print extraction summary before simplification
+        if self.verbose:
+            self._print_network_summary("Network extracted:")
+        
         # Optionally merge buses connected by closed switches
         if self.simplify_topology:
             n_buses_before = len(get_unique_buses(self.branches, self.shunts, self.transformers_3w))
@@ -82,7 +90,9 @@ class Network:
                 self.branches, self.shunts, self.transformers_3w
             )
             n_buses_after = len(get_unique_buses(self.branches, self.shunts, self.transformers_3w))
-            print(f"  Buses: {n_buses_before} → {n_buses_after}")
+            if self.verbose:
+                print(f"Topology simplified: {n_buses_before} to {n_buses_after} buses ({n_buses_before - n_buses_after} eliminated)")
+                self._print_network_summary("Network after simplification:")
         
         self.bus_names = get_unique_buses(self.branches, self.shunts, self.transformers_3w)
     
@@ -281,7 +291,7 @@ class Network:
                 valid_outages.append(gen_name)
                 
             except Exception as e:
-                print(f"Skipping {gen_name}: {e}")
+                logger.warning(f"Skipping {gen_name}: {e}")
         
         ratios_matrix = np.array(all_ratios)
         
@@ -309,7 +319,7 @@ class Network:
             elif stype == 'external_grid' and name in xnet_lookup:
                 self.source_data.append(xnet_lookup[name])
             else:
-                print(f"Warning: Source '{name}' (type: {stype}) not found in load flow data")
+                logger.warning(f"Source '{name}' (type: {stype}) not found in load flow data")
     
     def get_generator(self, name: str) -> GeneratorResult:
         """
@@ -355,6 +365,46 @@ class Network:
                     return 'Unknown'
         
         return 'Unknown'
+    
+    def _print_network_summary(self, title: str = "Network summary:") -> None:
+        """Print a summary of network elements to console."""
+        n_lines = len([b for b in self.branches if type(b).__name__ == 'LineBranch'])
+        n_trafos = len([b for b in self.branches if type(b).__name__ == 'TransformerBranch'])
+        n_trafos_3w = len(self.transformers_3w)
+        n_switches = len([b for b in self.branches if type(b).__name__ == 'SwitchBranch'])
+        n_zpu = len([b for b in self.branches if type(b).__name__ == 'CommonImpedanceBranch'])
+        n_sind = len([b for b in self.branches if type(b).__name__ == 'SeriesReactorBranch'])
+        n_gens = len([s for s in self.shunts if type(s).__name__ == 'GeneratorShunt'])
+        n_loads = len([s for s in self.shunts if type(s).__name__ == 'LoadShunt'])
+        n_xnets = len([s for s in self.shunts if type(s).__name__ == 'ExternalGridShunt'])
+        n_vacs = len([s for s in self.shunts if type(s).__name__ == 'VoltageSourceShunt'])
+        n_shunts = len([s for s in self.shunts if type(s).__name__ == 'ShuntFilterShunt'])
+        n_buses = len(get_unique_buses(self.branches, self.shunts, self.transformers_3w))
+        
+        print(f"{title}")
+        if n_lines > 0:
+            print(f"  Lines:              {n_lines}")
+        if n_trafos > 0:
+            print(f"  Transformers (2W):  {n_trafos}")
+        if n_trafos_3w > 0:
+            print(f"  Transformers (3W):  {n_trafos_3w}")
+        if n_switches > 0:
+            print(f"  Switches:           {n_switches}")
+        if n_zpu > 0:
+            print(f"  Common impedances:  {n_zpu}")
+        if n_sind > 0:
+            print(f"  Series reactors:    {n_sind}")
+        if n_gens > 0:
+            print(f"  Generators:         {n_gens}")
+        if n_loads > 0:
+            print(f"  Loads:              {n_loads}")
+        if n_xnets > 0:
+            print(f"  External grids:     {n_xnets}")
+        if n_vacs > 0:
+            print(f"  Voltage sources:    {n_vacs}")
+        if n_shunts > 0:
+            print(f"  Shunt filters:      {n_shunts}")
+        print(f"  Buses:              {n_buses}")
     
     def _hide(self) -> None:
         """Hide the PowerFactory application window."""

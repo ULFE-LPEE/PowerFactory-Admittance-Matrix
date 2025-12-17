@@ -6,10 +6,13 @@ retrieve results from PowerFactory.
 """
 
 import cmath
+import logging
 
 from .naming import get_bus_full_name
 from .results import BusResult, GeneratorResult, VoltageSourceResult, ExternalGridResult
 from ...core.elements import ShuntElement, GeneratorShunt, VoltageSourceShunt, ExternalGridShunt
+
+logger = logging.getLogger(__name__)
 
 
 def _calculate_internal_voltage(
@@ -86,11 +89,11 @@ def get_load_flow_results(app) -> dict[str, BusResult]:
             v_pu = bus.GetAttribute("m:u")      # Voltage magnitude in p.u.
             angle = bus.GetAttribute("m:phiu")  # Voltage angle in degrees
         except Exception as e:
-            print(f"Warning: Failed to get load flow results for bus {bus.loc_name}: {e}")
+            logger.info(f" Failed to get load flow results for bus {bus.loc_name}: {e}")
             continue
         
         if v_pu is None or angle is None:
-            print(f"Warning: Load flow results not available for bus {bus.loc_name}")
+            logger.info(f" Load flow results not available for bus {bus.loc_name}")
             continue
         
         v_kv = bus.uknom * v_pu             # Voltage in kV
@@ -131,7 +134,7 @@ def get_generator_data_from_pf(
     pf_gens = app.GetCalcRelevantObjects("*.ElmSym", 0, 0, 0)
     gen_pf_map = {gen.loc_name: gen for gen in pf_gens}
 
-    print(len(pf_gens))
+    logger.debug(len(pf_gens))
     
     for s in shunts:
         if type(s).__name__ != 'GeneratorShunt':
@@ -139,7 +142,7 @@ def get_generator_data_from_pf(
         
         bus_result = lf_results.get(s.bus_name)
         if bus_result is None:
-            print(f"Warning: No load flow result for bus {s.bus_name}, skipping generator {s.name}")
+            logger.warning(f" No load flow result for bus {s.bus_name}, skipping generator {s.name}")
             continue
         
         voltage = bus_result.voltage_complex
@@ -191,7 +194,7 @@ def get_generator_data_from_pf(
             zone=zone_name
         ))
     
-    print("Number of generators extracted:", len(results))
+    logger.debug("Number of generators extracted:", len(results))
     return results
 
 
@@ -228,7 +231,7 @@ def get_voltage_source_data_from_pf(
         
         bus_result = lf_results.get(s.bus_name)
         if bus_result is None:
-            print(f"Warning: No load flow result for bus {s.bus_name}, skipping voltage source {s.name}")
+            logger.warning(f" No load flow result for bus {s.bus_name}, skipping voltage source {s.name}")
             continue
         
         voltage = bus_result.voltage_complex
@@ -236,7 +239,7 @@ def get_voltage_source_data_from_pf(
         # Get PowerFactory object for this voltage source
         pf_vac = vac_pf_map.get(s.name)
         if pf_vac is None:
-            print(f"Warning: PowerFactory object not found for voltage source {s.name}")
+            logger.warning(f" PowerFactory object not found for voltage source {s.name}")
             continue
         
         # Get P and Q from load flow results
@@ -270,7 +273,7 @@ def get_voltage_source_data_from_pf(
             internal_voltage_angle=internal_v_angle
         ))
     
-    print("Number of voltage sources extracted:", len(results))
+    logger.debug("Number of voltage sources extracted:", len(results))
     return results
 
 
@@ -307,7 +310,7 @@ def get_external_grid_data_from_pf(
         
         bus_result = lf_results.get(s.bus_name)
         if bus_result is None:
-            print(f"Warning: No load flow result for bus {s.bus_name}, skipping external grid {s.name}")
+            logger.warning(f" No load flow result for bus {s.bus_name}, skipping external grid {s.name}")
             continue
         
         voltage = bus_result.voltage_complex
@@ -315,7 +318,7 @@ def get_external_grid_data_from_pf(
         # Get PowerFactory object for this external grid
         pf_xnet = xnet_pf_map.get(s.name)
         if pf_xnet is None:
-            print(f"Warning: PowerFactory object not found for external grid {s.name}")
+            logger.warning(f" PowerFactory object not found for external grid {s.name}")
             continue
         
         # Get P and Q from load flow results
@@ -355,5 +358,5 @@ def get_external_grid_data_from_pf(
             internal_voltage_angle=internal_v_angle
         ))
     
-    print("Number of external grids extracted:", len(results))
+    logger.debug("Number of external grids extracted:", len(results))
     return results

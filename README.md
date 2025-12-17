@@ -79,3 +79,18 @@ admittance_matrix/
 └── utils/
     └── helpers.py        # Utility functions
 ```
+
+## Logging
+
+By default, the library produces no console output. To enable logging:
+
+```python
+import logging
+logging.getLogger("admittance_matrix").setLevel(logging.WARNING)
+```
+
+For detailed debug output:
+
+```python
+logging.getLogger("admittance_matrix").setLevel(logging.INFO)
+```
