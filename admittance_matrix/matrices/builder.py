@@ -16,7 +16,6 @@ class MatrixType(Enum):
     STABILITY = "stability"            # Network + loads (for Kron reduction)
     STABILITY_FULL = "stability_full"  # Network + loads + generators on diagonal
 
-
 def get_unique_buses(
     branches: list[BranchElement], 
     shunts: list[ShuntElement],
@@ -40,7 +39,6 @@ def get_unique_buses(
             buses.add(t3w.lv_bus_name)
     
     return sorted(list(buses))
-
 
 def build_admittance_matrix(
     branches: list[BranchElement],
@@ -96,9 +94,15 @@ def build_admittance_matrix(
                 Y[i, j] += Yij
                 Y[j, i] += Yji
     
-    # Process shunt elements (add to diagonal)
+    # Add shunt filters (passive network elements always present)
+    for shunt in shunts:
+        if type(shunt).__name__ == 'ShuntFilterShunt':
+            i = bus_idx[shunt.bus_name]
+            Y[i, i] += shunt.get_admittance_pu(base_mva)
+    
+    # Process other shunt elements based on matrix type
     if matrix_type == MatrixType.STABILITY:
-        # Add only loads (generators will be added as internal buses separately)
+        # Add loads (generators/sources will be added as internal buses separately)
         for shunt in shunts:
             if type(shunt).__name__ == 'LoadShunt':
                 i = bus_idx[shunt.bus_name]
@@ -107,11 +111,12 @@ def build_admittance_matrix(
     elif matrix_type == MatrixType.STABILITY_FULL:
         # Add all shunts (loads + generators) directly to diagonal
         for shunt in shunts:
-            i = bus_idx[shunt.bus_name]
-            Y[i, i] += shunt.get_admittance_pu(base_mva)
+            shunt_type = type(shunt).__name__
+            if shunt_type != 'ShuntFilterShunt':  # Already added above
+                i = bus_idx[shunt.bus_name]
+                Y[i, i] += shunt.get_admittance_pu(base_mva)
     
     return Y, bus_idx
-
 
 def get_generator_buses(shunts: list[ShuntElement]) -> list[str]:
     """Extract bus names where generators are connected."""

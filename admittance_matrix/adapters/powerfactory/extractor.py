@@ -507,7 +507,7 @@ def get_network_elements(app) -> tuple[list[BranchElement], list[ShuntElement], 
             continue
         
         # Get filter type
-        shtype = getattr(shnt, 'shtype', 2) or 2
+        shtype = getattr(shnt, 'shtype') 
         try:
             filter_type = ShuntFilterType(shtype)
         except ValueError:
@@ -615,3 +615,38 @@ def get_network_elements(app) -> tuple[list[BranchElement], list[ShuntElement], 
         ))
 
     return branches, shunts, transformers_3w
+
+
+def get_main_bus_names(app) -> set[str]:
+    """
+    Get names of main busbars (terminals with iUsage == 0) from PowerFactory.
+    
+    In PowerFactory, iUsage indicates terminal usage type:
+    - 0: Busbar (main busbar)
+    - 1: Junction node
+    - 2: Internal node
+    
+    Args:
+        app: PowerFactory application instance
+        
+    Returns:
+        Set of bus names that are main busbars
+    """
+    main_buses: set[str] = set()
+    
+    # Get all terminals
+    terminals = app.GetCalcRelevantObjects("*.ElmTerm", 0, 0, 0)
+    
+    for term in terminals:
+        # Skip out-of-service or de-energized terminals
+        if getattr(term, 'outserv', 0) == 1:
+            continue
+        if term.IsEnergized() != 1:
+            continue
+        
+        # Check iUsage - 0 means main busbar
+        iUsage = getattr(term, 'iUsage', 1)  # Default to 1 (junction) if not found
+        if iUsage == 0:
+            main_buses.add(get_bus_full_name(term))
+    
+    return main_buses

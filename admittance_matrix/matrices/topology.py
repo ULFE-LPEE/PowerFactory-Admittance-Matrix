@@ -13,11 +13,24 @@ logger = logging.getLogger(__name__)
 
 
 class UnionFind:
-    """Simple Union-Find (Disjoint Set Union) data structure."""
+    """
+    Union-Find (Disjoint Set Union) data structure with preferred node support.
     
-    def __init__(self):
+    When preferred nodes are specified, they will be chosen as representatives
+    over non-preferred nodes during union operations.
+    """
+    
+    def __init__(self, preferred: set[str] | None = None):
+        """
+        Initialize Union-Find.
+        
+        Args:
+            preferred: Set of node names that should be preferred as representatives.
+                      These are typically main busbars (iUsage == 0 in PowerFactory).
+        """
         self.parent: dict[str, str] = {}
         self.rank: dict[str, int] = {}
+        self.preferred: set[str] = preferred or set()
     
     def find(self, x: str) -> str:
         """Find representative of set containing x (with path compression)."""
@@ -29,22 +42,41 @@ class UnionFind:
         return self.parent[x]
     
     def union(self, x: str, y: str) -> None:
-        """Union the sets containing x and y."""
+        """
+        Union the sets containing x and y.
+        
+        Preferred nodes (main busbars) are always chosen as representatives
+        over non-preferred nodes. Among preferred or non-preferred nodes,
+        union by rank is used.
+        """
         px, py = self.find(x), self.find(y)
         if px == py:
             return
-        # Union by rank
-        if self.rank[px] < self.rank[py]:
-            px, py = py, px
-        self.parent[py] = px
-        if self.rank[px] == self.rank[py]:
-            self.rank[px] += 1
+        
+        # Prefer main busbars as representatives
+        px_preferred = px in self.preferred
+        py_preferred = py in self.preferred
+        
+        if px_preferred and not py_preferred:
+            # px is preferred, make it the root
+            self.parent[py] = px
+        elif py_preferred and not px_preferred:
+            # py is preferred, make it the root
+            self.parent[px] = py
+        else:
+            # Both preferred or both not preferred: use rank
+            if self.rank[px] < self.rank[py]:
+                px, py = py, px
+            self.parent[py] = px
+            if self.rank[px] == self.rank[py]:
+                self.rank[px] += 1
 
 
 def simplify_topology(
     branches: list[BranchElement],
     shunts: list[ShuntElement],
-    transformers_3w: list[Transformer3WBranch]
+    transformers_3w: list[Transformer3WBranch],
+    main_buses: set[str] | None = None
 ) -> tuple[list[BranchElement], list[ShuntElement], list[Transformer3WBranch], dict[str, str]]:
     """
     Simplify network topology by merging buses connected by closed switches.
@@ -55,16 +87,20 @@ def simplify_topology(
     3. Rewrites all branch/shunt bus names to use representative names
     4. Removes the closed switches from the branch list
     
+    When main_buses is provided, main busbars (iUsage == 0 in PowerFactory)
+    are preferred as representatives during merging, preserving their names.
+    
     Args:
         branches: List of BranchElement objects
         shunts: List of ShuntElement objects  
         transformers_3w: List of Transformer3WBranch objects
+        main_buses: Set of bus names that are main busbars (preferred as representatives)
         
     Returns:
         Tuple of (filtered_branches, shunts, transformers_3w, bus_mapping)
         where bus_mapping is dict[original_name] -> representative_name
     """
-    uf = UnionFind()
+    uf = UnionFind(preferred=main_buses)
     
     # Step 1: Union buses connected by closed switches
     closed_switches: list[SwitchBranch] = []

@@ -15,7 +15,7 @@ from ..matrices.reducer import reduce_to_generator_internal_buses
 from ..matrices.analysis import calculate_power_distribution_ratios
 from ..matrices.diagnostics import diagnose_network, print_diagnostics
 from ..matrices.topology import simplify_topology
-from ..adapters.powerfactory import get_network_elements
+from ..adapters.powerfactory import get_network_elements, get_main_bus_names
 from ..adapters.powerfactory import run_load_flow, get_load_flow_results, get_generator_data_from_pf, get_voltage_source_data_from_pf, get_external_grid_data_from_pf
 from ..adapters.powerfactory import GeneratorResult, VoltageSourceResult, ExternalGridResult
 
@@ -86,8 +86,12 @@ class Network:
         # Optionally merge buses connected by closed switches
         if self.simplify_topology:
             n_buses_before = len(get_unique_buses(self.branches, self.shunts, self.transformers_3w))
+            
+            # Get main busbars to preserve their names during merging
+            main_buses = get_main_bus_names(self.app)
+            
             self.branches, self.shunts, self.transformers_3w, self.bus_mapping = simplify_topology(
-                self.branches, self.shunts, self.transformers_3w
+                self.branches, self.shunts, self.transformers_3w, main_buses=main_buses
             )
             n_buses_after = len(get_unique_buses(self.branches, self.shunts, self.transformers_3w))
             if self.verbose:

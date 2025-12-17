@@ -6,7 +6,7 @@ This module contains the base classes and implementations for:
 - Shunt elements (loads, generators)
 """
 
-from abc import ABC, abstractmethod
+from abc import ABC
 from dataclasses import dataclass, field
 from enum import Enum
 import numpy as np
@@ -500,6 +500,21 @@ class LoadShunt(ShuntElement):
         else:
             self.admittance = complex(1e-12, 1e-12)
     
+    def get_admittance_pu(self, base_mva: float = 100.0) -> complex:
+        """
+        Get admittance in per-unit on system base.
+        Y_pu = Y_siemens * Z_base = Y_siemens * (V_base^2 / S_base)
+        
+        Uses load flow voltage if available, otherwise nominal voltage.
+        """
+        # Use LF voltage if available, otherwise nominal
+        v_kv = self.lf_voltage_kv if self.lf_voltage_kv > 0 else self.voltage_kv
+        
+        # if v_kv > 0:
+        #     z_base = (v_kv ** 2) / base_mva
+        #     return self.admittance * z_base
+        return self.admittance / base_mva
+    
     def update_admittance_with_lf_voltage(self) -> None:
         """
         Recalculate admittance using load flow voltage.
@@ -514,7 +529,7 @@ class LoadShunt(ShuntElement):
         if v_kv > 0:
             self.admittance = complex(self.p_mw, -self.q_mvar) / (v_kv ** 2)
         else:
-            self.admittance = complex(0, 0)
+            self.admittance = complex(1e-12, 1e-12)
     
     def set_lf_voltage(self, voltage_kv: float) -> None:
         """Set the load flow voltage and recalculate admittance."""
@@ -634,19 +649,23 @@ class ShuntFilterShunt(ShuntElement):
     def _calculate_admittance_siemens(self) -> complex:
         """Calculate total admittance in Siemens."""
         omega_sys = 2 * np.pi * self.f_sys
-        
+
         if self.filter_type == ShuntFilterType.R_L_C:
-            # Series R-L with parallel C
-            # Reactor branch (R + jX)
-            if self.rrea_ohm == 0 and self.xrea_ohm == 0:
-                Y_rea_step = complex(0, 0)
-            else:
-                denom = self.rrea_ohm**2 + self.xrea_ohm**2
-                Y_rea_step = complex(self.rrea_ohm, -self.xrea_ohm) / denom
-            Y_rea_total = Y_rea_step * self.n_rea
+            # Series R-L-C tuned filter (all in series)
+            # Z = R + jX_L - jX_C = R + j(X_L - 1/B_C)
+            R = self.rrea_ohm * self.n_rea
+            X_L = self.xrea_ohm * self.n_rea
             
-            # Capacitor branch (jB)
-            Y_cap_total = 1j * (self.bcap_us * 1e-6) * self.n_cap
+            # Capacitive reactance: X_C = 1/B_C (bcap is susceptance in µS)
+            B_C = self.bcap_us * 1e-6 * self.n_cap  # Susceptance in S
+            X_C = 1 / B_C if B_C != 0 else 0.0
+            
+            # Total series impedance
+            Z_total = complex(R, X_L - X_C)
+            
+            if abs(Z_total) < 1e-12:
+                return complex(0, 0)
+            return 1 / Z_total
         
         elif self.filter_type == ShuntFilterType.R_L:
             # Series R-L (reactor only)
