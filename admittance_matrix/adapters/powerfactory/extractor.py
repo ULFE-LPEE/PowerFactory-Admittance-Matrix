@@ -66,11 +66,10 @@ def get_network_elements(app) -> tuple[list[BranchElement], list[ShuntElement], 
             logger.warning(f" Line '{line.loc_name}': Failed to get cubicle/terminal - {type(e).__name__}: {e}")
             continue
         
-        # Extract line parameters
+        # Extract line parameters (results from PF)
         R = line.R1  # Total resistance (ohms)
         X = line.X1  # Total reactance (ohms)
         B = line.B1  # Total susceptance (µS)
-        n_parallel = getattr(line, 'nlnum', 1) or 1  # Number of parallel systems
         
         branches.append(LineBranch(
             pf_object=line,
@@ -81,7 +80,6 @@ def get_network_elements(app) -> tuple[list[BranchElement], list[ShuntElement], 
             resistance_ohm=R,
             reactance_ohm=X,
             susceptance_us=B,
-            n_parallel=1 # I think we read this from the R, X and B directly
         ))
 
     # --- Branch elements: Switches/Couplers (ElmCoup) ---
@@ -177,7 +175,7 @@ def get_network_elements(app) -> tuple[list[BranchElement], list[ShuntElement], 
         
         # Get tap position and calculate tap ratio
         tap_pos = trafo.nntap if hasattr(trafo, 'nntap') else 0
-        tap_neutral = pf_type.ntpm if hasattr(pf_type, 'ntpm') else 0
+        tap_neutral = pf_type.nntap0 if hasattr(pf_type, 'nntap0') else 0
         dutap = pf_type.dutap if hasattr(pf_type, 'dutap') else 0.0
         
         # Tap ratio: t = 1 + (tap_pos - tap_neutral) * dutap / 100
@@ -187,8 +185,7 @@ def get_network_elements(app) -> tuple[list[BranchElement], list[ShuntElement], 
         tap_side = pf_type.tap_side if hasattr(pf_type, 'tap_side') else 0
         
         # Number of parallel transformers
-        n_parallel = getattr(trafo, 'ntnum', 1) or 1
-        
+        n_parallel = getattr(trafo, 'ntnum')
         branches.append(TransformerBranch(
             pf_object=trafo,
             name=trafo.loc_name,

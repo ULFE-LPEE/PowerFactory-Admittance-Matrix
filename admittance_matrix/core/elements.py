@@ -15,7 +15,7 @@ import powerfactory as pf
 
 class ShuntFilterType(Enum):
     """Shunt filter/capacitor layout types matching PowerFactory ElmShnt."""
-    R_L_C = 0       # Series R-L with parallel C
+    R_L_C = 0       # Series R-L-C
     R_L = 1         # Series R-L (reactor only)
     C = 2           # Capacitor only
     R_L_C_Rp = 3    # Series R-L-C with parallel R
@@ -65,7 +65,6 @@ class LineBranch(BranchElement):
     resistance_ohm: float = 0.0
     reactance_ohm: float = 0.0
     susceptance_us: float = 0.0  # Total susceptance in µS
-    n_parallel: int = 1  # Number of parallel systems (nlnum in PowerFactory)
     
     def __post_init__(self):
         # Calculate series admittance for a single line
@@ -75,10 +74,10 @@ class LineBranch(BranchElement):
         single_admittance = 1 / complex(r, x)
         
         # Multiply by number of parallel systems (parallel admittances add up)
-        self.admittance = single_admittance * self.n_parallel
+        self.admittance = single_admittance
         
         # Calculate shunt admittance (B/2 at each end), also scaled by n_parallel
-        self.shunt_admittance = complex(0, self.susceptance_us * 1e-6 / 2) * self.n_parallel
+        self.shunt_admittance = complex(0, self.susceptance_us * 1e-6 / 2)
     
     def get_y_matrix_entries(self, base_mva: float | None = None) -> tuple[complex, complex, complex, complex]:
         """Include shunt admittance (pi-model)"""
