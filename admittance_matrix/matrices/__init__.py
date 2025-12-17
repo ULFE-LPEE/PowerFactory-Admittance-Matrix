@@ -29,6 +29,10 @@ from .diagnostics import (
     print_diagnostics,
 )
 
+from .topology import (
+    simplify_topology,
+)
+
 __all__ = [
     'MatrixType',
     'build_admittance_matrix',
@@ -46,4 +50,6 @@ __all__ = [
     'validate_generator_buses',
     'diagnose_network',
     'print_diagnostics',
+    # Topology
+    'simplify_topology',
 ]

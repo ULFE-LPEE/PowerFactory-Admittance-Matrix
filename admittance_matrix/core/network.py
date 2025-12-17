@@ -12,6 +12,7 @@ from ..matrices.builder import build_admittance_matrix, get_unique_buses, Matrix
 from ..matrices.reducer import reduce_to_generator_internal_buses
 from ..matrices.analysis import calculate_power_distribution_ratios
 from ..matrices.diagnostics import diagnose_network, print_diagnostics
+from ..matrices.topology import simplify_topology
 from ..adapters.powerfactory import get_network_elements
 from ..adapters.powerfactory import run_load_flow, get_load_flow_results, get_generator_data_from_pf, get_voltage_source_data_from_pf, get_external_grid_data_from_pf
 from ..adapters.powerfactory import GeneratorResult, VoltageSourceResult, ExternalGridResult
@@ -29,28 +30,31 @@ class Network:
     - Calculating power distribution ratios
     """
     
-    def __init__(self, app, base_mva: float = 100.0):
+    def __init__(self, app, base_mva: float = 100.0, simplify_topology: bool = False):
         """
         Initialize the Network from a PowerFactory application.
         
         Args:
             app: PowerFactory application instance (already connected and with active project)
             base_mva: System base power in MVA (default 100)
+            simplify_topology: If True, merge buses connected by closed switches (reduces bus count)
         """
         self.app: pf.Application = app
         self._hide()
 
         # Network data
         self.base_mva = base_mva
+        self.simplify_topology = simplify_topology
+        self.bus_mapping = None  # Mapping from original to merged bus names
         self.branches = []
         self.shunts = []
         self.transformers_3w = []  # 3-winding transformers
         self.bus_names = []
         
-        # Matrices
-        self.Y_lf = None  # Load flow Y-matrix
-        self.Y_stab = None  # Stability Y-matrix (with loads)
-        self.Y_reduced = None  # Reduced to generator internal buses
+        # Matrices (use properties Y_lf_matrix, Y_stab_matrix, Y_reduced_matrix for access)
+        self._Y_lf: np.ndarray | None = None
+        self._Y_stab: np.ndarray | None = None
+        self._Y_reduced: np.ndarray | None = None
         self.bus_idx = None
         self.gen_names = []  # Names of sources in reduced matrix
         self.source_types = []  # Types: 'generator', 'voltage_source', 'external_grid'
@@ -70,6 +74,16 @@ class Network:
     def _extract_network(self):
         """Extract network elements from PowerFactory."""
         self.branches, self.shunts, self.transformers_3w = get_network_elements(self.app)
+        
+        # Optionally merge buses connected by closed switches
+        if self.simplify_topology:
+            n_buses_before = len(get_unique_buses(self.branches, self.shunts, self.transformers_3w))
+            self.branches, self.shunts, self.transformers_3w, self.bus_mapping = simplify_topology(
+                self.branches, self.shunts, self.transformers_3w
+            )
+            n_buses_after = len(get_unique_buses(self.branches, self.shunts, self.transformers_3w))
+            print(f"  Buses: {n_buses_before} → {n_buses_after}")
+        
         self.bus_names = get_unique_buses(self.branches, self.shunts, self.transformers_3w)
     
     def _update_load_admittances_with_lf_voltage(self) -> None:
@@ -103,7 +117,7 @@ class Network:
             include_generators: If True, include generator admittances in diagonal
         """
         # Build load flow matrix (network only)
-        self.Y_lf, self.bus_idx = build_admittance_matrix(
+        self._Y_lf, self.bus_idx = build_admittance_matrix(
             self.branches, self.shunts, self.bus_names,
             matrix_type=MatrixType.LOAD_FLOW,
             base_mva=self.base_mva,
@@ -112,7 +126,7 @@ class Network:
         
         # Build stability matrix (with loads)
         matrix_type = MatrixType.STABILITY_FULL if include_generators else MatrixType.STABILITY
-        self.Y_stab, _ = build_admittance_matrix(
+        self._Y_stab, _ = build_admittance_matrix(
             self.branches, self.shunts, self.bus_names,
             matrix_type=matrix_type,
             base_mva=self.base_mva,
@@ -173,11 +187,11 @@ class Network:
             include_external_grids: If True, include external grids in reduction
         """
         self._hide()
-        if self.Y_stab is None:
+        if self._Y_stab is None:
             raise RuntimeError("Must call build_matrices() first")
         
-        self.Y_reduced, self.gen_names, self.source_types = reduce_to_generator_internal_buses(
-            self.Y_stab, self.bus_idx, self.shunts, self.base_mva,
+        self._Y_reduced, self.gen_names, self.source_types = reduce_to_generator_internal_buses(
+            self._Y_stab, self.bus_idx, self.shunts, self.base_mva,
             include_voltage_sources=include_voltage_sources,
             include_external_grids=include_external_grids
         )
@@ -195,7 +209,7 @@ class Network:
             Tuple of (ratios array, source names in order, source types in order)
         """
         self._hide()
-        if self.Y_reduced is None:
+        if self._Y_reduced is None:
             raise RuntimeError("Must call reduce_to_generators() first")
         if self.gen_data is None:
             raise RuntimeError("Must call run_load_flow() first")
@@ -205,7 +219,7 @@ class Network:
         self._build_source_data()
 
         ratios, source_names_order, source_types_order = calculate_power_distribution_ratios(
-            self.Y_reduced, self.source_data, disturbance_source_name
+            self._Y_reduced, self.source_data, disturbance_source_name
         )
         self._show()
         return ratios, source_names_order, source_types_order
@@ -234,7 +248,7 @@ class Network:
                 - source_types: List of source types (column types)
         """
         self._hide()
-        if self.Y_reduced is None:
+        if self._Y_reduced is None:
             raise RuntimeError("Must call reduce_to_generators() first")
         if self.gen_data is None:
             raise RuntimeError("Must call run_load_flow() first")
@@ -255,7 +269,7 @@ class Network:
         for _, gen_name in enumerate(outage_generators):
             try:
                 ratios_i, source_names, source_types = calculate_power_distribution_ratios(
-                    self.Y_reduced, self.source_data, gen_name
+                    self._Y_reduced, self.source_data, gen_name
                 )
                 
                 if normalize:
@@ -370,6 +384,27 @@ class Network:
         return len(self.bus_names)
     
     @property
+    def Y_lf_matrix(self) -> np.ndarray:
+        """Get load flow Y-matrix. Raises if not built yet."""
+        if self._Y_lf is None:
+            raise RuntimeError("Y_lf not built - call _build_matrices() first")
+        return self._Y_lf
+    
+    @property
+    def Y_stab_matrix(self) -> np.ndarray:
+        """Get stability Y-matrix (with loads). Raises if not built yet."""
+        if self._Y_stab is None:
+            raise RuntimeError("Y_stab not built - call _build_matrices() first")
+        return self._Y_stab
+    
+    @property
+    def Y_reduced_matrix(self) -> np.ndarray:
+        """Get reduced Y-matrix (generator internal buses). Raises if not built yet."""
+        if self._Y_reduced is None:
+            raise RuntimeError("Y_reduced not built - call reduce_to_generators() first")
+        return self._Y_reduced
+    
+    @property
     def n_generators(self) -> int:
         """Number of generators in the network."""
         return len([s for s in self.shunts if type(s).__name__ == 'GeneratorShunt'])
@@ -426,8 +461,8 @@ class Network:
             shunts=self.shunts,
             bus_names=self.bus_names,
             bus_idx=self.bus_idx,
-            Y_lf=self.Y_lf,
-            Y_stab=self.Y_stab
+            Y_lf=self._Y_lf,
+            Y_stab=self._Y_stab
         )
         
         if print_results:
