@@ -4,8 +4,22 @@ This folder contains Jupyter notebooks demonstrating how to use the `admittance_
 
 ## Prerequisites
 
-1. **PowerFactory** must be running with an active project and study case
+1. **PowerFactory** must be installed
 2. **Python packages**: `numpy`, `pandas`, `matplotlib`
+
+## Network Options
+
+When creating a `Network` object, you can use the following options:
+
+```python
+from admittance_matrix import Network
+
+# Basic usage
+net = Network(app, base_mva=100.0)
+
+# With topology simplification (merges buses connected by closed switches)
+net = Network(app, base_mva=100.0, simplify_topology=True)
+```
 
 ## Notebooks
 
@@ -14,19 +28,18 @@ This folder contains Jupyter notebooks demonstrating how to use the `admittance_
 Demonstrates the basic workflow:
 
 - Connect to PowerFactory
-- Extract network elements (lines, transformers, generators, loads)
-- Build the admittance matrix
+- Import a PFD file and activate project (or manually open desired network in PF)
+- Extract network and build admittance matrix
+- View load flow Y-matrix as DataFrame
 - Run load flow calculation
-- View Y-matrix as DataFrame
-- Visualize sparsity pattern
+- Display load flow results (voltage magnitude and angle)
 
-### 02_power_distribution_ratios.ipynb
+### 02_stability_admittance_matrix_with_power_distribution.ipynb
 
-Demonstrates power redistribution analysis:
+Demonstrates stability analysis with power distribution ratios:
 
+- Connect to PowerFactory and import PFD file
 - Build network and run load flow
-- View generator data
-- Apply Kron reduction to generator internal buses
-- Calculate power distribution ratios for a generator trip
-- Bar chart visualization
-- Comparison heatmap for multiple generator trips
+- Reduce admittance matrix to generator internal buses (Kron reduction)
+- Calculate power distribution ratios for a generator trip scenario
+- Bar chart visualization of power redistribution

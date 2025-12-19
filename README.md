@@ -2,6 +2,14 @@
 
 A Python library for extracting admittance matrices from DIgSILENT PowerFactory networks.
 
+## Notice
+
+⚠️ **This library is under active development.**
+
+The library currently supports extraction of multiple PowerFactory network elements, however some components require further refinement—particularly the proper handling of voltage tap settings for 2-winding and 3-winding transformers.
+
+If you encounter any issues or would like to request new functionality, please [open an issue](https://github.com/valenciaga1231/PF_Admittance_Matrix/issues) on GitHub or contact the developer directly.
+
 ## Features
 
 - Extract load flow and stability admittance matrices from PowerFactory
