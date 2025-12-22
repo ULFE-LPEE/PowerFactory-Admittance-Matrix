@@ -12,20 +12,9 @@ from enum import Enum
 import numpy as np
 import powerfactory as pf
 
-
-class ShuntFilterType(Enum):
-    """Shunt filter/capacitor layout types matching PowerFactory ElmShnt."""
-    R_L_C = 0       # Series R-L-C
-    R_L = 1         # Series R-L (reactor only)
-    C = 2           # Capacitor only
-    R_L_C_Rp = 3    # Series R-L-C with parallel R
-    R_L_C1_C2_Rp = 4  # High-pass filter: Series R-L-C1 with parallel C2 and Rp
-
-
 @dataclass
 class BranchElement(ABC):
     """Abstract base class for two-terminal elements."""
-    pf_object: pf.DataObject
     name: str
     from_bus_name: str
     to_bus_name: str
@@ -71,12 +60,9 @@ class LineBranch(BranchElement):
         # Use small values to avoid numerical instabilities (near-zero impedance)
         r = self.resistance_ohm if self.resistance_ohm != 0 else 1e-12
         x = self.reactance_ohm if self.reactance_ohm != 0 else 1e-12
-        single_admittance = 1 / complex(r, x)
+        self.admittance = 1 / complex(r, x)
         
-        # Multiply by number of parallel systems (parallel admittances add up)
-        self.admittance = single_admittance
-        
-        # Calculate shunt admittance (B/2 at each end), also scaled by n_parallel
+        # Calculate shunt admittance (B/2 at each end)
         self.shunt_admittance = complex(0, self.susceptance_us * 1e-6 / 2)
     
     def get_y_matrix_entries(self, base_mva: float | None = None) -> tuple[complex, complex, complex, complex]:
@@ -462,7 +448,6 @@ class Transformer3WBranch:
 @dataclass
 class ShuntElement(ABC):
     """Abstract base class for single-terminal elements."""
-    pf_object: pf.DataObject
     name: str
     bus_name: str
     voltage_kv: float
@@ -605,6 +590,13 @@ class VoltageSourceShunt(ShuntElement):
         z_complex = complex(r, x)
         self.admittance = 1 / z_complex
 
+class ShuntFilterType(Enum):
+    """Shunt filter/capacitor layout types matching PowerFactory ElmShnt."""
+    R_L_C = 0       # Series R-L-C
+    R_L = 1         # Series R-L (reactor only)
+    C = 2           # Capacitor only
+    R_L_C_Rp = 3    # Series R-L-C with parallel R
+    R_L_C1_C2_Rp = 4  # High-pass filter: Series R-L-C1 with parallel C2 and Rp
 
 @dataclass
 class ShuntFilterShunt(ShuntElement):

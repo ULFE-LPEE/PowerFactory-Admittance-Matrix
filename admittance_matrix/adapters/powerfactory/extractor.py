@@ -72,7 +72,6 @@ def get_network_elements(app) -> tuple[list[BranchElement], list[ShuntElement], 
         B = line.B1  # Total susceptance (µS)
         
         branches.append(LineBranch(
-            pf_object=line,
             name=line.loc_name,
             from_bus_name=get_bus_full_name(from_bus),
             to_bus_name=get_bus_full_name(to_bus),
@@ -113,7 +112,6 @@ def get_network_elements(app) -> tuple[list[BranchElement], list[ShuntElement], 
         is_closed = not (hasattr(switch, 'on_off') and switch.on_off == 0)
         
         branches.append(SwitchBranch(
-            pf_object=switch,
             name=switch.loc_name,
             from_bus_name=get_bus_full_name(from_bus),
             to_bus_name=get_bus_full_name(to_bus),
@@ -187,7 +185,6 @@ def get_network_elements(app) -> tuple[list[BranchElement], list[ShuntElement], 
         # Number of parallel transformers
         n_parallel = getattr(trafo, 'ntnum')
         branches.append(TransformerBranch(
-            pf_object=trafo,
             name=trafo.loc_name,
             from_bus_name=get_bus_full_name(hv_bus),
             to_bus_name=get_bus_full_name(lv_bus),
@@ -248,7 +245,6 @@ def get_network_elements(app) -> tuple[list[BranchElement], list[ShuntElement], 
         rated_mva = getattr(zpu, 'Sn', 0.0) or 0.0
         
         branches.append(CommonImpedanceBranch(
-            pf_object=zpu,
             name=zpu.loc_name,
             from_bus_name=get_bus_full_name(from_bus),
             to_bus_name=get_bus_full_name(to_bus),
@@ -305,7 +301,6 @@ def get_network_elements(app) -> tuple[list[BranchElement], list[ShuntElement], 
         rated_mva = getattr(sind, 'Sn', 0.0) or 0.0
         
         branches.append(SeriesReactorBranch(
-            pf_object=sind,
             name=sind.loc_name,
             from_bus_name=get_bus_full_name(from_bus),
             to_bus_name=get_bus_full_name(to_bus),
@@ -349,7 +344,6 @@ def get_network_elements(app) -> tuple[list[BranchElement], list[ShuntElement], 
         xdss = pf_type.xdss if pf_type and hasattr(pf_type, 'xdss') else 0.0
         
         shunts.append(GeneratorShunt(
-            pf_object=gen,
             name=gen.loc_name,
             bus_name=get_bus_full_name(bus),
             voltage_kv=bus.uknom,
@@ -386,7 +380,6 @@ def get_network_elements(app) -> tuple[list[BranchElement], list[ShuntElement], 
             continue
         
         shunts.append(LoadShunt(
-            pf_object=load,
             name=load.loc_name,
             bus_name=get_bus_full_name(bus),
             voltage_kv=bus.uknom,
@@ -427,7 +420,6 @@ def get_network_elements(app) -> tuple[list[BranchElement], list[ShuntElement], 
         r_x_ratio = xnet.rntxn if hasattr(xnet, 'rntxn') else 0.1
         
         shunts.append(ExternalGridShunt(
-            pf_object=xnet,
             name=xnet.loc_name,
             bus_name=get_bus_full_name(bus),
             voltage_kv=bus.uknom,
@@ -468,7 +460,6 @@ def get_network_elements(app) -> tuple[list[BranchElement], list[ShuntElement], 
         x_ohm = vac.X1 if hasattr(vac, 'X1') else 0.0
         
         shunts.append(VoltageSourceShunt(
-            pf_object=vac,
             name=vac.loc_name,
             bus_name=get_bus_full_name(bus),
             voltage_kv=bus.uknom,
@@ -533,7 +524,6 @@ def get_network_elements(app) -> tuple[list[BranchElement], list[ShuntElement], 
         rpara_ohm = getattr(shnt, 'rpara', 0.0) or 0.0
         
         shunts.append(ShuntFilterShunt(
-            pf_object=shnt,
             name=shnt.loc_name,
             bus_name=get_bus_full_name(bus),
             voltage_kv=bus.uknom,
