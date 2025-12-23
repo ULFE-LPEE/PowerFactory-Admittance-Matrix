@@ -15,7 +15,8 @@ from ...core.elements import (
     LineBranch, SwitchBranch, TransformerBranch, Transformer3WBranch,
     CommonImpedanceBranch, SeriesReactorBranch,
     LoadShunt, GeneratorShunt, ExternalGridShunt, VoltageSourceShunt,
-    ShuntFilterShunt, ShuntFilterType
+    ShuntFilterShunt, ShuntFilterType,
+    TapChanger, TapChangerType, RatioAsymTapChanger, IdealPhaseTapChanger, SymPhaseTapChanger
 )
 
 logger = logging.getLogger(__name__)
@@ -171,16 +172,49 @@ def get_network_elements(app) -> tuple[list[BranchElement], list[ShuntElement], 
         if uk_percent > ur_percent:
             x_pu = ((uk_percent ** 2 - ur_percent ** 2) ** 0.5) / 100.0
         
-        # Get tap position and calculate tap ratio
+        # Get tap changer parameters
         tap_pos = trafo.nntap if hasattr(trafo, 'nntap') else 0
-        tap_neutral = pf_type.nntap0 if hasattr(pf_type, 'nntap0') else 0
-        dutap = pf_type.dutap if hasattr(pf_type, 'dutap') else 0.0
-        
-        # Tap ratio: t = 1 + (tap_pos - tap_neutral) * dutap / 100
-        tap_ratio = 1.0 + (tap_pos - tap_neutral) * dutap / 100.0
-        
-        # Determine tap side (0 = HV, 1 = LV)
         tap_side = pf_type.tap_side if hasattr(pf_type, 'tap_side') else 0
+        nntap0 = pf_type.nntap0 if hasattr(pf_type, 'nntap0') else 0
+        ntpmn = pf_type.ntpmn if hasattr(pf_type, 'ntpmn') else 0
+        ntpmx = pf_type.ntpmx if hasattr(pf_type, 'ntpmx') else 0
+        
+        # Get tap changer type (0 = Ratio/Asym, 1 = Ideal phase, 2 = Sym phase)
+        tapchtype = pf_type.tapchtype if hasattr(pf_type, 'tapchtype') else 0
+        
+        # Create appropriate tap changer based on type
+        tap_changer: TapChanger
+        if tapchtype == 1:  # Ideal phase shifter
+            dphitap = pf_type.dphitap if hasattr(pf_type, 'dphitap') else 0.0
+            tap_changer = IdealPhaseTapChanger(
+                tap_side=tap_side,
+                nntap0=nntap0,
+                ntpmn=ntpmn,
+                ntpmx=ntpmx,
+                dphitap=dphitap
+            )
+        elif tapchtype == 2:  # Symmetric phase shifter
+            dutap = pf_type.dutap if hasattr(pf_type, 'dutap') else 0.0
+            phitr = pf_type.phitr if hasattr(pf_type, 'phitr') else 0.0
+            tap_changer = SymPhaseTapChanger(
+                tap_side=tap_side,
+                nntap0=nntap0,
+                ntpmn=ntpmn,
+                ntpmx=ntpmx,
+                dutap=dutap,
+                phitr=phitr
+            )
+        else:  # tapchtype == 0: Ratio/Asymmetric phase shifter (default)
+            dutap = pf_type.dutap if hasattr(pf_type, 'dutap') else 0.0
+            phitr = pf_type.phitr if hasattr(pf_type, 'phitr') else 0.0
+            tap_changer = RatioAsymTapChanger(
+                tap_side=tap_side,
+                nntap0=nntap0,
+                ntpmn=ntpmn,
+                ntpmx=ntpmx,
+                dutap=dutap,
+                phitr=phitr
+            )
         
         # Number of parallel transformers
         n_parallel = getattr(trafo, 'ntnum')
@@ -194,8 +228,8 @@ def get_network_elements(app) -> tuple[list[BranchElement], list[ShuntElement], 
             lv_kv=lv_kv,
             resistance_pu=r_pu,
             reactance_pu=x_pu,
-            tap_ratio=tap_ratio,
-            tap_side=tap_side,
+            tap_changer=tap_changer,
+            tap_pos=tap_pos,
             n_parallel=n_parallel
         ))
 
@@ -552,9 +586,12 @@ def get_network_elements(app) -> tuple[list[BranchElement], list[ShuntElement], 
         
         # Get terminals via cubicles (HV = 0, MV = 1, LV = 2)
         try:
-            cub0 = trafo.GetCubicle(0)
-            cub1 = trafo.GetCubicle(1)
-            cub2 = trafo.GetCubicle(2)
+            # cub0 = trafo.GetCubicle(0)
+            # cub1 = trafo.GetCubicle(1)
+            # cub2 = trafo.GetCubicle(2)
+            cub0 = trafo.GetAttribute("bushv")
+            cub1 = trafo.GetAttribute("busmv")
+            cub2 = trafo.GetAttribute("buslv")
             if cub0 is None or cub1 is None or cub2 is None:
                 logger.info(f" 3W Transformer '{trafo.loc_name}': Missing cubicle(s), skipping")
                 continue
@@ -584,6 +621,30 @@ def get_network_elements(app) -> tuple[list[BranchElement], list[ShuntElement], 
             mv_kv = pf_type.utrn3_m if hasattr(pf_type, 'utrn3_m') else 0.0
             lv_kv = pf_type.utrn3_l if hasattr(pf_type, 'utrn3_l') else 0.0
         
+        # Get HV side tap changer parameters
+        tap_changer_hv: TapChanger | None = None
+        tap_pos_hv = 0
+        if pf_type is not None:
+            # Get tap position from transformer element
+            tap_pos_hv = trafo.n3tap_h if hasattr(trafo, 'n3tap_h') else 0
+            
+            # Get tap changer parameters from type
+            du3tp_h = pf_type.du3tp_h if hasattr(pf_type, 'du3tp_h') else 0.0
+            ph3tr_h = pf_type.ph3tr_h if hasattr(pf_type, 'ph3tr_h') else 0.0
+            n3tp0_h = pf_type.n3tp0_h if hasattr(pf_type, 'n3tp0_h') else 0
+            n3tmn_h = pf_type.n3tmn_h if hasattr(pf_type, 'n3tmn_h') else 0
+            n3tmx_h = pf_type.n3tmx_h if hasattr(pf_type, 'n3tmx_h') else 0
+            
+            # Create RatioAsymTapChanger for HV side
+            tap_changer_hv = RatioAsymTapChanger(
+                tap_side=0,  # HV side
+                nntap0=n3tp0_h,
+                ntpmn=n3tmn_h,
+                ntpmx=n3tmx_h,
+                dutap=du3tp_h,
+                phitr=ph3tr_h
+            )
+        
         # Number of parallel transformers
         n_parallel = getattr(trafo, 'ntnum', 1) or 1
         
@@ -598,7 +659,9 @@ def get_network_elements(app) -> tuple[list[BranchElement], list[ShuntElement], 
             rated_power_mva=rated_mva,
             hv_kv=hv_kv,
             mv_kv=mv_kv,
-            lv_kv=lv_kv
+            lv_kv=lv_kv,
+            tap_changer_hv=tap_changer_hv,
+            tap_pos_hv=tap_pos_hv
         ))
 
     return branches, shunts, transformers_3w

@@ -17,6 +17,11 @@ from .elements import (
     VoltageSourceShunt,
     ShuntFilterShunt,
     ShuntFilterType,
+    TapChanger,
+    TapChangerType,
+    RatioAsymTapChanger,
+    IdealPhaseTapChanger,
+    SymPhaseTapChanger,
 )
 
 from .network import Network
@@ -36,5 +41,10 @@ __all__ = [
     'VoltageSourceShunt',
     'ShuntFilterShunt',
     'ShuntFilterType',
+    'TapChanger',
+    'TapChangerType',
+    'RatioAsymTapChanger',
+    'IdealPhaseTapChanger',
+    'SymPhaseTapChanger',
     'Network',
 ]
