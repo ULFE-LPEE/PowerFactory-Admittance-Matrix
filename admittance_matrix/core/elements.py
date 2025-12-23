@@ -6,11 +6,177 @@ This module contains the base classes and implementations for:
 - Shunt elements (loads, generators)
 """
 
-from abc import ABC
+from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from enum import Enum
+import math
 import numpy as np
 import powerfactory as pf
+
+
+class TapChangerType(Enum):
+    """Tap changer type enumeration matching PowerFactory tapchtype."""
+    RATIO_ASYM = 0      # Ratio/Asymmetric phase shifter
+    IDEAL_PHASE = 1     # Ideal phase shifter
+    SYM_PHASE = 2       # Symmetric phase shifter
+
+
+@dataclass
+class TapChanger(ABC):
+    """
+    Abstract base class for transformer tap changers.
+    
+    Attributes:
+        tap_side: Tap side (0 = HV, 1 = LV)
+        nntap0: Neutral tap position
+        ntpmn: Minimum tap position
+        ntpmx: Maximum tap position
+    """
+    tap_side: int = 0
+    nntap0: int = 0
+    ntpmn: int = 0
+    ntpmx: int = 0
+    
+    @abstractmethod
+    def get_complex_tap_ratio(self, tap_pos: int) -> complex:
+        """
+        Calculate the complex tap ratio for a given tap position.
+        
+        Args:
+            tap_pos: Current tap position
+            
+        Returns:
+            Complex tap ratio t = |t| * exp(j * phi)
+        """
+        pass
+    
+    @property
+    @abstractmethod
+    def tap_type(self) -> TapChangerType:
+        """Return the tap changer type."""
+        pass
+
+
+@dataclass
+class RatioAsymTapChanger(TapChanger):
+    """
+    Ratio/Asymmetric phase shifter tap changer.
+    
+    Used for transformers with voltage magnitude control and 
+    optional asymmetric phase shift.
+    
+    Attributes:
+        dutap: Additional voltage per tap in %
+        phitr: Phase angle of du in degrees
+    """
+    dutap: float = 0.0
+    phitr: float = 0.0
+    
+    @property
+    def tap_type(self) -> TapChangerType:
+        return TapChangerType.RATIO_ASYM
+    
+    def get_complex_tap_ratio(self, tap_pos: int) -> complex:
+        """
+        Calculate complex tap ratio for ratio/asymmetric phase shifter.
+        
+        The voltage change per tap has both magnitude (dutap) and angle (phitr):
+        du = dutap * exp(j * phitr)
+        t = 1 + n * du / 100
+        
+        Where n = tap_pos - nntap0 (deviation from neutral)
+        """
+        n = tap_pos - self.nntap0
+        
+        # Convert phitr to radians
+        phi_rad = math.radians(self.phitr)
+        
+        # Complex voltage change per tap
+        du_complex = (self.dutap / 100.0) * complex(math.cos(phi_rad), math.sin(phi_rad))
+        
+        # Complex tap ratio
+        tap_ratio = 1.0 + n * du_complex
+        
+        return tap_ratio
+
+
+@dataclass
+class IdealPhaseTapChanger(TapChanger):
+    """
+    Ideal phase shifter tap changer.
+    
+    Used for pure phase shifting transformers with no magnitude change.
+    
+    Attributes:
+        dphitap: Additional phase angle per tap in degrees
+    """
+    dphitap: float = 0.0
+    
+    @property
+    def tap_type(self) -> TapChangerType:
+        return TapChangerType.IDEAL_PHASE
+    
+    def get_complex_tap_ratio(self, tap_pos: int) -> complex:
+        """
+        Calculate complex tap ratio for ideal phase shifter.
+        
+        Pure phase shift with unity magnitude:
+        t = exp(j * n * dphitap)
+        
+        Where n = tap_pos - nntap0 (deviation from neutral)
+        """
+        n = tap_pos - self.nntap0
+        
+        # Total phase shift in radians
+        phi_rad = math.radians(n * self.dphitap)
+        
+        # Complex tap ratio with unity magnitude
+        tap_ratio = complex(math.cos(phi_rad), math.sin(phi_rad))
+        
+        return tap_ratio
+
+
+@dataclass
+class SymPhaseTapChanger(TapChanger):
+    """
+    Symmetric phase shifter tap changer.
+    
+    Used for transformers with symmetric phase shifting capability.
+    Similar to ratio/asymmetric but with symmetric voltage change.
+    
+    Attributes:
+        dutap: Additional voltage per tap in %
+        phitr: Phase angle of du in degrees
+    """
+    dutap: float = 0.0
+    phitr: float = 0.0
+    
+    @property
+    def tap_type(self) -> TapChangerType:
+        return TapChangerType.SYM_PHASE
+    
+    def get_complex_tap_ratio(self, tap_pos: int) -> complex:
+        """
+        Calculate complex tap ratio for symmetric phase shifter.
+        
+        The voltage change per tap has both magnitude (dutap) and angle (phitr):
+        du = dutap * exp(j * phitr)
+        t = 1 + n * du / 100
+        
+        Where n = tap_pos - nntap0 (deviation from neutral)
+        """
+        n = tap_pos - self.nntap0
+        
+        # Convert phitr to radians
+        phi_rad = math.radians(self.phitr)
+        
+        # Complex voltage change per tap
+        du_complex = (self.dutap / 100.0) * complex(math.cos(phi_rad), math.sin(phi_rad))
+        
+        # Complex tap ratio
+        tap_ratio = 1.0 + n * du_complex
+        
+        return tap_ratio
 
 @dataclass
 class BranchElement(ABC):
@@ -99,26 +265,41 @@ class TransformerBranch(BranchElement):
     Uses the standard transformer pi-model with off-nominal tap ratio.
     The model accounts for:
     - Series impedance (R + jX) on transformer base
-    - Tap ratio (t) - ratio of actual voltage to nominal voltage on HV side
+    - Complex tap ratio (t) - includes magnitude and phase shift from tap changer
     - Magnetizing admittance (optional)
     - Number of parallel transformers (ntnum)
     
-    Y-matrix for transformer between buses i (HV) and j (LV):
-        Y_ii = y / t²
+    Y-matrix for transformer between buses i (HV) and j (LV) with complex tap ratio:
+        Y_ii = y / |t|²
         Y_jj = y
-        Y_ij = Y_ji = -y / t
+        Y_ij = -y / t*  (conjugate of t)
+        Y_ji = -y / t
     
-    Where y = 1/(R + jX) in per-unit on system base.
+    Where y = 1/(R + jX) in per-unit on system base, t is complex tap ratio.
     """
     rated_power_mva: float = 0.0
     hv_kv: float = 0.0  # HV side rated voltage
     lv_kv: float = 0.0  # LV side rated voltage
     resistance_pu: float = 0.0  # R on transformer base (p.u.)
     reactance_pu: float = 0.0   # X on transformer base (p.u.)
-    tap_ratio: float = 1.0      # Tap ratio (actual/nominal on HV side)
-    tap_side: int = 0           # 0 = HV side, 1 = LV side
+    tap_changer: TapChanger | None = None  # Tap changer object
+    tap_pos: int = 0             # Current tap position
     magnetizing_admittance: complex = field(default=complex(0, 0))  # Y_m in p.u.
     n_parallel: int = 1  # Number of parallel transformers (ntnum in PowerFactory)
+    
+    @property
+    def tap_ratio(self) -> complex:
+        """Get the complex tap ratio from the tap changer."""
+        if self.tap_changer is not None:
+            return self.tap_changer.get_complex_tap_ratio(self.tap_pos)
+        return complex(1.0, 0.0)
+    
+    @property
+    def tap_side(self) -> int:
+        """Get the tap side from the tap changer."""
+        if self.tap_changer is not None:
+            return self.tap_changer.tap_side
+        return 0
     
     def __post_init__(self):
         # Calculate series admittance in per-unit on transformer base for single transformer
@@ -144,31 +325,37 @@ class TransformerBranch(BranchElement):
     
     def get_y_matrix_entries(self, base_mva: float | None = None) -> tuple[complex, complex, complex, complex]:
         """
-        Return Y-matrix contributions for transformer with tap ratio.
+        Return Y-matrix contributions for transformer with complex tap ratio.
         
-        For tap on HV side (from_bus):
-            Y_ii = y / t²    (HV side)
-            Y_jj = y         (LV side)  
-            Y_ij = Y_ji = -y / t
+        For tap on HV side (from_bus) with complex tap ratio t:
+            Y_ii = y / |t|²    (HV side)
+            Y_jj = y           (LV side)  
+            Y_ij = -y / t*     (conjugate of t)
+            Y_ji = -y / t
             
-        For tap on LV side (to_bus):
-            Y_ii = y         (HV side)
-            Y_jj = y / t²    (LV side)
-            Y_ij = Y_ji = -y / t
+        For tap on LV side (to_bus) with complex tap ratio t:
+            Y_ii = y           (HV side)
+            Y_jj = y / |t|²    (LV side)
+            Y_ij = -y / t*
+            Y_ji = -y / t
         """
         y = self.get_admittance_pu(base_mva) if base_mva else self.admittance
-        t = self.tap_ratio
+        t = self.tap_ratio  # Complex tap ratio
+        t_conj = t.conjugate()
+        t_mag_sq = abs(t) ** 2
         
         if self.tap_side == 0:  # Tap on HV (from) side
-            Yii = y / (t * t)
+            Yii = y / t_mag_sq
             Yjj = y
-            Yij = -y / t
+            Yij = -y / t_conj
+            Yji = -y / t
         else:  # Tap on LV (to) side
             Yii = y
-            Yjj = y / (t * t)
-            Yij = -y / t
+            Yjj = y / t_mag_sq
+            Yij = -y / t_conj
+            Yji = -y / t
         
-        return (Yii, Yjj, Yij, Yij)
+        return (Yii, Yjj, Yij, Yji)
 
 
 @dataclass
@@ -300,13 +487,21 @@ class Transformer3WBranch:
     """
     Three-winding transformer element.
     
-    Uses PowerFactory's GetZpu() method to retrieve pair impedances directly
-    and builds a 3×3 nodal admittance matrix (HV, MV, LV order).
+    Uses PowerFactory's GetZpu() method to retrieve pair impedances directly.
     
-    The pair impedances are:
+    The pair impedances from short-circuit tests (with 3rd winding open) are:
     - Z_HM (pair 0): HV-MV impedance (LV open)
     - Z_ML (pair 1): MV-LV impedance (HV open)  
     - Z_LH (pair 2): LV-HV impedance (MV open)
+    
+    These are converted to star (Y) equivalent impedances:
+    - Z_H = (Z_HM + Z_LH - Z_ML) / 2  (HV winding to internal node)
+    - Z_M = (Z_HM + Z_ML - Z_LH) / 2  (MV winding to internal node)
+    - Z_L = (Z_ML + Z_LH - Z_HM) / 2  (LV winding to internal node)
+    
+    The 3x3 admittance matrix is obtained by Kron-reducing the internal star node.
+    
+    Tap ratio effects (magnitude and phase shift) are applied on each winding side.
     
     Local node order: [HV, MV, LV]
     """
@@ -323,6 +518,35 @@ class Transformer3WBranch:
     hv_kv: float = 0.0
     mv_kv: float = 0.0
     lv_kv: float = 0.0
+    
+    # Tap changers for each winding (only HV typically used)
+    tap_changer_hv: TapChanger | None = None
+    tap_pos_hv: int = 0
+    tap_changer_mv: TapChanger | None = None
+    tap_pos_mv: int = 0
+    tap_changer_lv: TapChanger | None = None
+    tap_pos_lv: int = 0
+    
+    @property
+    def tap_ratio_hv(self) -> complex:
+        """Get the complex tap ratio for HV side."""
+        if self.tap_changer_hv is not None:
+            return self.tap_changer_hv.get_complex_tap_ratio(self.tap_pos_hv)
+        return complex(1.0, 0.0)
+    
+    @property
+    def tap_ratio_mv(self) -> complex:
+        """Get the complex tap ratio for MV side."""
+        if self.tap_changer_mv is not None:
+            return self.tap_changer_mv.get_complex_tap_ratio(self.tap_pos_mv)
+        return complex(1.0, 0.0)
+    
+    @property
+    def tap_ratio_lv(self) -> complex:
+        """Get the complex tap ratio for LV side."""
+        if self.tap_changer_lv is not None:
+            return self.tap_changer_lv.get_complex_tap_ratio(self.tap_pos_lv)
+        return complex(1.0, 0.0)
     
     def _get_tap_z_dependent_side(self) -> int:
         """
@@ -353,61 +577,157 @@ class Transformer3WBranch:
         return complex(rpu, xpu)
     
     def Z_hm(self) -> complex:
-        """Z between HV and MV in pu on system base."""
+        """Z between HV and MV in pu on system base (LV open)."""
         return self._get_Z_pair(0)
     
     def Z_ml(self) -> complex:
-        """Z between MV and LV in pu on system base."""
+        """Z between MV and LV in pu on system base (HV open)."""
         return self._get_Z_pair(1)
     
     def Z_lh(self) -> complex:
-        """Z between LV and HV in pu on system base."""
+        """Z between LV and HV in pu on system base (MV open)."""
         return self._get_Z_pair(2)
     
-    def _safe_inv(self, Z: complex, eps: float = 1e-12) -> complex:
-        """Avoid infinities in admittance; treat |Z|<eps as open (0 admittance)."""
+    def get_star_impedances(self) -> tuple[complex, complex, complex]:
+        """
+        Convert pair impedances to star (Y) equivalent impedances.
+        
+        The measured pair impedances satisfy:
+            Z_hm = Z_H + Z_M
+            Z_ml = Z_M + Z_L
+            Z_lh = Z_L + Z_H
+        
+        Solving for star impedances:
+            Z_H = (Z_hm + Z_lh - Z_ml) / 2
+            Z_M = (Z_hm + Z_ml - Z_lh) / 2
+            Z_L = (Z_ml + Z_lh - Z_hm) / 2
+        
+        Returns:
+            Tuple of (Z_H, Z_M, Z_L) in pu on system base
+        """
+        Z_hm = self.Z_hm()
+        Z_ml = self.Z_ml()
+        Z_lh = self.Z_lh()
+        
+        Z_H = (Z_hm + Z_lh - Z_ml) / 2.0
+        Z_M = (Z_hm + Z_ml - Z_lh) / 2.0
+        Z_L = (Z_ml + Z_lh - Z_hm) / 2.0
+        
+        return Z_H, Z_M, Z_L
+    
+    def _safe_inv(self, Z: complex, eps: float = 1e-12, max_admittance: float = 1e6) -> complex:
+        """
+        Safely invert impedance to admittance.
+        
+        If |Z| < eps (near short circuit), cap admittance to max_admittance.
+        If |Z| is very large (near open circuit), admittance approaches 0.
+        
+        Args:
+            Z: Impedance to invert
+            eps: Threshold for near-zero impedance
+            max_admittance: Maximum admittance magnitude to return
+            
+        Returns:
+            Admittance Y = 1/Z, capped if necessary
+        """
         if abs(Z) < eps:
-            return complex(0.0, 0.0)
-        return 1.0 / Z
+            # Near short circuit - cap to large admittance
+            return complex(max_admittance, 0.0)
+        Y = 1.0 / Z
+        if abs(Y) > max_admittance:
+            # Cap magnitude while preserving angle
+            return Y * (max_admittance / abs(Y))
+        return Y
     
-    def Y_hm(self) -> complex:
-        """Admittance HV-MV."""
-        return self._safe_inv(self.Z_hm()) * self.n_parallel
-    
-    def Y_ml(self) -> complex:
-        """Admittance MV-LV."""
-        return self._safe_inv(self.Z_ml()) * self.n_parallel
-    
-    def Y_lh(self) -> complex:
-        """Admittance LV-HV."""
-        return self._safe_inv(self.Z_lh()) * self.n_parallel
+    def get_star_admittances(self) -> tuple[complex, complex, complex]:
+        """
+        Get star admittances from star impedances, scaled by n_parallel.
+        
+        Returns:
+            Tuple of (Y_H, Y_M, Y_L) in pu on system base
+        """
+        Z_H, Z_M, Z_L = self.get_star_impedances()
+        
+        Y_H = self._safe_inv(Z_H) * self.n_parallel
+        Y_M = self._safe_inv(Z_M) * self.n_parallel
+        Y_L = self._safe_inv(Z_L) * self.n_parallel
+        
+        return Y_H, Y_M, Y_L
     
     def get_local_admittance_matrix(self) -> tuple[list[list[complex]], list[str]]:
         """
         Returns 3×3 pu nodal admittance matrix in order [HV, MV, LV].
         
+        Uses star-to-Kron-reduction to obtain the 3-port equivalent:
+        
+        For star admittances y_H, y_M, y_L connected to internal node,
+        with y_s = y_H + y_M + y_L:
+        
+        Off-diagonal: Y_ij = -(y_i * y_j) / y_s
+        Diagonal: Y_ii = y_i - (y_i^2) / y_s = y_i * (1 - y_i/y_s)
+        
+        Then applies complex tap ratios for each winding:
+        - For winding i with tap t_i, the admittance terms are modified as:
+          Y_ii → Y_ii / |t_i|^2
+          Y_ij → Y_ij / (t_i* · t_j)  (conjugate of t_i times t_j)
+        
         Returns:
             Tuple of (3x3 matrix as nested list, [hv_bus, mv_bus, lv_bus])
         """
-        Y_ab = self.Y_hm()  # HV-MV
-        Y_bc = self.Y_ml()  # MV-LV
-        Y_ca = self.Y_lh()  # LV-HV
+        y_H, y_M, y_L = self.get_star_admittances()
+        y_s = y_H + y_M + y_L
         
-        # Build 3x3 matrix
-        # Off-diagonals
-        Y_01 = -Y_ab  # HV-MV
-        Y_12 = -Y_bc  # MV-LV
-        Y_02 = -Y_ca  # HV-LV
+        # Avoid division by zero if all admittances are zero
+        if abs(y_s) < 1e-12:
+            matrix = [
+                [complex(0, 0), complex(0, 0), complex(0, 0)],
+                [complex(0, 0), complex(0, 0), complex(0, 0)],
+                [complex(0, 0), complex(0, 0), complex(0, 0)]
+            ]
+            return matrix, [self.hv_bus_name, self.mv_bus_name, self.lv_bus_name]
         
-        # Diagonals
-        Y_00 = Y_ab + Y_ca  # HV
-        Y_11 = Y_ab + Y_bc  # MV
-        Y_22 = Y_bc + Y_ca  # LV
+        # Kron reduction: Y_ii = y_i * (y_s - y_i) / y_s = y_i - y_i^2/y_s
+        # Off-diagonal: Y_ij = -y_i * y_j / y_s
+        Y_00 = y_H - (y_H * y_H) / y_s  # HV diagonal
+        Y_11 = y_M - (y_M * y_M) / y_s  # MV diagonal
+        Y_22 = y_L - (y_L * y_L) / y_s  # LV diagonal
+        
+        Y_01_base = -(y_H * y_M) / y_s  # HV-MV off-diagonal
+        Y_02_base = -(y_H * y_L) / y_s  # HV-LV off-diagonal
+        Y_12_base = -(y_M * y_L) / y_s  # MV-LV off-diagonal
+        
+        # Apply tap ratios
+        t_H = self.tap_ratio_hv
+        t_M = self.tap_ratio_mv
+        t_L = self.tap_ratio_lv
+        
+        t_H_conj = t_H.conjugate()
+        t_M_conj = t_M.conjugate()
+        t_L_conj = t_L.conjugate()
+        
+        t_H_mag_sq = abs(t_H) ** 2
+        t_M_mag_sq = abs(t_M) ** 2
+        t_L_mag_sq = abs(t_L) ** 2
+        
+        # Diagonal elements: Y_ii / |t_i|^2
+        Y_00 = Y_00 / t_H_mag_sq
+        Y_11 = Y_11 / t_M_mag_sq
+        Y_22 = Y_22 / t_L_mag_sq
+        
+        # Off-diagonal elements: Y_ij / (t_i* · t_j) and Y_ji / (t_j* · t_i)
+        Y_01 = Y_01_base / (t_H_conj * t_M)
+        Y_10 = Y_01_base / (t_M_conj * t_H)
+        
+        Y_02 = Y_02_base / (t_H_conj * t_L)
+        Y_20 = Y_02_base / (t_L_conj * t_H)
+        
+        Y_12 = Y_12_base / (t_M_conj * t_L)
+        Y_21 = Y_12_base / (t_L_conj * t_M)
         
         matrix = [
             [Y_00, Y_01, Y_02],
-            [Y_01, Y_11, Y_12],
-            [Y_02, Y_12, Y_22]
+            [Y_10, Y_11, Y_12],
+            [Y_20, Y_21, Y_22]
         ]
         
         bus_names = [self.hv_bus_name, self.mv_bus_name, self.lv_bus_name]
@@ -424,18 +744,27 @@ class Transformer3WBranch:
         Note: base_mva parameter is kept for API compatibility but the
         impedances are already on system base from GetZpu().
         """
-        Y_ab = self.Y_hm()  # HV-MV
-        Y_bc = self.Y_ml()  # MV-LV  
-        Y_ca = self.Y_lh()  # LV-HV
+        matrix, bus_names = self.get_local_admittance_matrix()
         
-        contributions = {
-            # HV-MV pair
-            (self.hv_bus_name, self.mv_bus_name): (Y_ab, Y_ab, -Y_ab, -Y_ab),
-            # MV-LV pair
-            (self.mv_bus_name, self.lv_bus_name): (Y_bc, Y_bc, -Y_bc, -Y_bc),
-            # LV-HV pair (note: LV first, HV second to maintain consistency)
-            (self.lv_bus_name, self.hv_bus_name): (Y_ca, Y_ca, -Y_ca, -Y_ca),
-        }
+        # Extract contributions from the 3x3 matrix
+        # Each pair contributes to both diagonals and off-diagonals
+        contributions = {}
+        
+        # For a proper 3-port, we return the full matrix entries
+        # This is different from simple 2-port branches
+        for i in range(3):
+            for j in range(3):
+                if i != j:
+                    bus_i = bus_names[i]
+                    bus_j = bus_names[j]
+                    if (bus_i, bus_j) not in contributions:
+                        # Store: (Yii contribution, Yjj contribution, Yij, Yji)
+                        contributions[(bus_i, bus_j)] = (
+                            matrix[i][i],  # Not used directly, but for reference
+                            matrix[j][j],  # Not used directly, but for reference
+                            matrix[i][j],
+                            matrix[j][i]
+                        )
         
         return contributions
     
