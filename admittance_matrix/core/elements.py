@@ -11,7 +11,6 @@ from dataclasses import dataclass, field
 from enum import Enum
 import math
 import numpy as np
-import powerfactory as pf
 
 
 class TapChangerType(Enum):
@@ -487,12 +486,12 @@ class Transformer3WBranch:
     """
     Three-winding transformer element.
     
-    Uses PowerFactory's GetZpu() method to retrieve pair impedances directly.
+    Calculates pair impedances from short-circuit test data (uk, ukr percentages).
     
     The pair impedances from short-circuit tests (with 3rd winding open) are:
-    - Z_HM (pair 0): HV-MV impedance (LV open)
-    - Z_ML (pair 1): MV-LV impedance (HV open)  
-    - Z_LH (pair 2): LV-HV impedance (MV open)
+    - Z_HM (uktr3_h): HV-MV impedance (LV open), referred to min(S_H, S_M)
+    - Z_ML (uktr3_m): MV-LV impedance (HV open), referred to min(S_M, S_L)
+    - Z_LH (uktr3_l): LV-HV impedance (MV open), referred to min(S_L, S_H)
     
     These are converted to star (Y) equivalent impedances:
     - Z_H = (Z_HM + Z_LH - Z_ML) / 2  (HV winding to internal node)
@@ -505,7 +504,6 @@ class Transformer3WBranch:
     
     Local node order: [HV, MV, LV]
     """
-    pf_object: pf.DataObject  # ElmTr3
     name: str
     hv_bus_name: str
     mv_bus_name: str
@@ -513,11 +511,28 @@ class Transformer3WBranch:
     base_mva: float = 100.0  # System base MVA
     n_parallel: int = 1  # Number of parallel transformers
     
-    # Optional: store rated values for reference
-    rated_power_mva: float = 0.0
+    # Rated powers for each winding (MVA)
+    rated_power_hv_mva: float = 0.0
+    rated_power_mv_mva: float = 0.0
+    rated_power_lv_mva: float = 0.0
+    
+    # Rated voltages for each winding (kV)
     hv_kv: float = 0.0
     mv_kv: float = 0.0
     lv_kv: float = 0.0
+    
+    # Short-circuit voltages (uk) in % for each pair
+    # uktr3_h: HV-MV pair (referred to min(S_H, S_M))
+    # uktr3_m: MV-LV pair (referred to min(S_M, S_L))
+    # uktr3_l: LV-HV pair (referred to min(S_L, S_H))
+    uk_hm_percent: float = 0.0
+    uk_ml_percent: float = 0.0
+    uk_lh_percent: float = 0.0
+    
+    # Real parts of short-circuit voltages (ukr) in % for each pair
+    ukr_hm_percent: float = 0.0
+    ukr_ml_percent: float = 0.0
+    ukr_lh_percent: float = 0.0
     
     # Tap changers for each winding (only HV typically used)
     tap_changer_hv: TapChanger | None = None
@@ -548,45 +563,61 @@ class Transformer3WBranch:
             return self.tap_changer_lv.get_complex_tap_ratio(self.tap_pos_lv)
         return complex(1.0, 0.0)
     
-    def _get_tap_z_dependent_side(self) -> int:
+    def _calculate_pair_impedance_pu(self, uk_percent: float, ukr_percent: float, 
+                                      s_ref_mva: float) -> complex:
         """
-        Side whose tap affects the impedance (0=HV, 1=MV, 2=LV, or -1 if none).
+        Calculate pair impedance in pu on system base from short-circuit test data.
+        
+        Args:
+            uk_percent: Short-circuit voltage magnitude in %
+            ukr_percent: Resistive part of short-circuit voltage in %
+            s_ref_mva: Reference power (min of two winding ratings) in MVA
+            
+        Returns:
+            Complex impedance Z = R + jX in pu on system base
         """
-        return self.pf_object.GetTapZDependentSide()
-    
-    def _get_tap_position_for_Z(self) -> int:
-        """
-        Tap position to use in GetZpu: tap of the Z-dependent side.
-        If none is defined, fall back to HV side tap (0).
-        """
-        z_side = self._get_tap_z_dependent_side()
-        if z_side < 0:
-            z_side = 0  # fallback: HV side
-        return self.pf_object.NTap(z_side)
-    
-    def _get_Z_pair(self, pair_index: int) -> complex:
-        """
-        Get pair impedance in pu on SYSTEM base between:
-            pair_index = 0 → HV-MV
-                         1 → MV-LV
-                         2 → LV-HV
-        """
-        tap_pos = self._get_tap_position_for_Z()
-        # systembase = 1 → pu on system base (e.g. 100 MVA)
-        rpu, xpu = self.pf_object.GetZpu(tap_pos, pair_index, 1)
-        return complex(rpu, xpu)
+        if s_ref_mva <= 0 or uk_percent <= 0:
+            return complex(1e-12, 1e-12)  # Return small value to avoid singularities
+        
+        # Calculate R and X in pu on the reference (transformer) base
+        r_pu_ref = ukr_percent / 100.0
+        
+        # X = sqrt(uk² - ukr²) / 100
+        uk_sq = uk_percent ** 2
+        ukr_sq = ukr_percent ** 2
+        if uk_sq > ukr_sq:
+            x_pu_ref = math.sqrt(uk_sq - ukr_sq) / 100.0
+        else:
+            x_pu_ref = uk_percent / 100.0  # Fallback: assume X ≈ uk if ukr > uk
+        
+        # Convert from transformer base to system base
+        # Z_pu conversion: Z_pu_new = Z_pu_old * (S_new / S_old)
+        # Where S_old = s_ref_mva (transformer base) and S_new = self.base_mva (system base)
+        z_pu_ref = complex(r_pu_ref, x_pu_ref)
+        z_pu_sys = z_pu_ref * (self.base_mva / s_ref_mva)
+        
+        return z_pu_sys
     
     def Z_hm(self) -> complex:
         """Z between HV and MV in pu on system base (LV open)."""
-        return self._get_Z_pair(0)
+        s_ref = min(self.rated_power_hv_mva, self.rated_power_mv_mva)
+        return self._calculate_pair_impedance_pu(
+            self.uk_hm_percent, self.ukr_hm_percent, s_ref
+        )
     
     def Z_ml(self) -> complex:
         """Z between MV and LV in pu on system base (HV open)."""
-        return self._get_Z_pair(1)
+        s_ref = min(self.rated_power_mv_mva, self.rated_power_lv_mva)
+        return self._calculate_pair_impedance_pu(
+            self.uk_ml_percent, self.ukr_ml_percent, s_ref
+        )
     
     def Z_lh(self) -> complex:
         """Z between LV and HV in pu on system base (MV open)."""
-        return self._get_Z_pair(2)
+        s_ref = min(self.rated_power_lv_mva, self.rated_power_hv_mva)
+        return self._calculate_pair_impedance_pu(
+            self.uk_lh_percent, self.ukr_lh_percent, s_ref
+        )
     
     def get_star_impedances(self) -> tuple[complex, complex, complex]:
         """
@@ -921,141 +952,133 @@ class VoltageSourceShunt(ShuntElement):
 
 class ShuntFilterType(Enum):
     """Shunt filter/capacitor layout types matching PowerFactory ElmShnt."""
-    R_L_C = 0       # Series R-L-C
+    R_L_C = 0       # Series R-L-C (tuned filter)
     R_L = 1         # Series R-L (reactor only)
     C = 2           # Capacitor only
-    R_L_C_Rp = 3    # Series R-L-C with parallel R
+    R_L_C_Rp = 3    # Series R-L-C with parallel R (damped filter)
     R_L_C1_C2_Rp = 4  # High-pass filter: Series R-L-C1 with parallel C2 and Rp
+
 
 @dataclass
 class ShuntFilterShunt(ShuntElement):
     """
     Shunt filter/capacitor element (ElmShnt).
     
-    Models various shunt filter configurations:
-    - R_L_C: Series R-L with parallel C (tuned filter)
-    - R_L: Series R-L (shunt reactor)
-    - C: Capacitor bank
-    - R_L_C_Rp: Series R-L-C with parallel R (damped filter)
-    - R_L_C1_C2_Rp: High-pass filter with series R-L-C1 and parallel C2, Rp
+    For steady-state power flow and stability analysis, the filter is modeled
+    using its actual reactive power output (Qact) which PowerFactory calculates
+    based on the current operating point (voltage, frequency, active steps).
     
-    All parameters are stored in base units (Ohms, µS, µF) and converted
-    to per-unit in get_admittance_pu().
+    This simplifies the model while maintaining accuracy because:
+    - Qact already accounts for all active steps
+    - Qact reflects the actual operating point at system frequency
+    - For Y-matrix purposes, we need the equivalent susceptance at fundamental frequency
+    
+    Admittance calculation:
+        Y = (P - jQ) / V²  [Siemens]
+        For purely reactive: Y = -jQ / V² = jB
+        
+    Sign convention (generator convention):
+        Q > 0: Capacitive (generating reactive power, positive susceptance)
+        Q < 0: Inductive (absorbing reactive power, negative susceptance)
+    
+    Supported filter types:
+    - Type 0 (R_L_C): Series R-L-C tuned filter
+    - Type 1 (R_L): Series R-L shunt reactor
+    - Type 2 (C): Capacitor bank
+    - Type 3 (R_L_C_Rp): Damped filter
+    - Type 4 (R_L_C1_C2_Rp): High-pass filter
     """
     filter_type: ShuntFilterType = ShuntFilterType.C
     
-    # Active steps
-    n_cap: float = 1.0   # Number of active capacitor steps
-    n_rea: float = 1.0   # Number of active reactor steps
+    # Actual reactive power output (from PowerFactory)
+    q_mvar: float = 0.0  # Actual reactive power in Mvar (positive = capacitive)
+    p_mw: float = 0.0    # Actual active power in MW (losses, usually small)
     
-    # R-L-C parameters (per step, in base units)
+    # Controller parameters (for reference)
+    ncapx: int = 1       # Maximum number of capacitor steps
+    ncapa: int = 1       # Active number of capacitor steps
+    nreax: int = 1       # Maximum number of reactor steps  
+    nreaa: int = 1       # Active number of reactor steps
+    
+    # Design parameters (for reference/detailed modeling)
+    qtotn_mvar: float = 0.0  # Rated reactive power per step [Mvar] (type 0)
+    qrean_mvar: float = 0.0  # Rated reactive power L per step [Mvar] (type 1)
+    fres_hz: float = 0.0     # Resonant frequency [Hz]
+    quality_factor: float = 0.0  # Quality factor at resonant/nominal frequency
+    
+    # Layout parameters per step (for detailed modeling if needed)
     bcap_us: float = 0.0     # Capacitor susceptance per step [µS]
     xrea_ohm: float = 0.0    # Reactor reactance per step [Ohm]
     rrea_ohm: float = 0.0    # Reactor resistance per step [Ohm]
-    gparac_us: float = 0.0   # Parallel conductance per step [µS]
-    
-    # High-pass filter parameters
-    c1_uf: float = 0.0       # Series capacitor C1 [µF]
-    c2_uf: float = 0.0       # Parallel capacitor C2 [µF]
-    rpara_ohm: float = 0.0   # Parallel resistance [Ohm]
-    
-    # System frequency
-    f_sys: float = 50.0      # System frequency [Hz]
     
     def __post_init__(self):
-        """Calculate admittance in Siemens based on filter type and parameters."""
-        self.admittance = self._calculate_admittance_siemens()
-    
-    def _calculate_admittance_siemens(self) -> complex:
-        """Calculate total admittance in Siemens."""
-        omega_sys = 2 * np.pi * self.f_sys
-
-        if self.filter_type == ShuntFilterType.R_L_C:
-            # Series R-L-C tuned filter (all in series)
-            # Z = R + jX_L - jX_C = R + j(X_L - 1/B_C)
-            R = self.rrea_ohm * self.n_rea
-            X_L = self.xrea_ohm * self.n_rea
-            
-            # Capacitive reactance: X_C = 1/B_C (bcap is susceptance in µS)
-            B_C = self.bcap_us * 1e-6 * self.n_cap  # Susceptance in S
-            X_C = 1 / B_C if B_C != 0 else 0.0
-            
-            # Total series impedance
-            Z_total = complex(R, X_L - X_C)
-            
-            if abs(Z_total) < 1e-12:
-                return complex(0, 0)
-            return 1 / Z_total
+        """
+        Calculate admittance from actual power output.
         
-        elif self.filter_type == ShuntFilterType.R_L:
-            # Series R-L (reactor only)
-            denom = self.rrea_ohm**2 + self.xrea_ohm**2
-            if denom == 0:
-                Y_step = complex(0, 0)
-            else:
-                Y_step = complex(self.rrea_ohm, -self.xrea_ohm) / denom
-            return Y_step * self.n_rea
-        
-        elif self.filter_type == ShuntFilterType.C:
-            # Capacitor bank with optional parallel conductance
-            Y_step = (self.gparac_us * 1e-6) + 1j * (self.bcap_us * 1e-6)
-            return Y_step * self.n_cap
-        
-        elif self.filter_type == ShuntFilterType.R_L_C_Rp:
-            # Damped filter: Series R-L-C with parallel Rp
-            # Similar to R_L_C but with additional parallel resistance
-            if self.rrea_ohm == 0 and self.xrea_ohm == 0:
-                Y_rea_step = complex(0, 0)
-            else:
-                denom = self.rrea_ohm**2 + self.xrea_ohm**2
-                Y_rea_step = complex(self.rrea_ohm, -self.xrea_ohm) / denom
-            Y_rea_total = Y_rea_step * self.n_rea
-            
-            Y_cap_total = 1j * (self.bcap_us * 1e-6) * self.n_cap
-            
-            # Parallel resistance
-            Y_p = 1 / self.rpara_ohm if self.rpara_ohm != 0 else complex(0, 0)
-            
-            return Y_rea_total + Y_cap_total + Y_p
-        
-        elif self.filter_type == ShuntFilterType.R_L_C1_C2_Rp:
-            # High-pass filter: Series R-L-C1 with parallel C2 and Rp
-            B_C1 = omega_sys * self.c1_uf * 1e-6
-            B_C2 = omega_sys * self.c2_uf * 1e-6
-            
-            # Branch 1: Series R-L-C1
-            if B_C1 == 0:
-                Z_C1 = complex(0, 0)
-            else:
-                Z_C1 = -1j / B_C1
-            
-            Z_branch = complex(self.rrea_ohm, self.xrea_ohm) + Z_C1
-            if abs(Z_branch) < 1e-12:
-                Y_branch = complex(0, 0)
-            else:
-                Y_branch = 1 / Z_branch
-            
-            # Branch 2: Parallel resistor Rp
-            Y_p = 1 / self.rpara_ohm if self.rpara_ohm != 0 else complex(0, 0)
-            
-            # Branch 3: Parallel capacitor C2
-            Y_c2 = 1j * B_C2
-            
-            # Total admittance (all branches in parallel)
-            Y_total = Y_branch + Y_p + Y_c2
-            
-            # Apply capacitor steps (filters usually switch as a unit)
-            return Y_total * self.n_cap
-        
+        Y = (P - jQ) / V²  [Siemens]
+        """
+        if self.voltage_kv > 0:
+            v_sq = self.voltage_kv ** 2  # kV² = MW/S = Mvar/S
+            # Complex power S = P + jQ, admittance Y = S* / |V|² = (P - jQ) / V²
+            self.admittance = complex(self.p_mw, -self.q_mvar) / v_sq
         else:
-            return complex(0, 0)
+            self.admittance = complex(0, 0)
     
     def get_admittance_pu(self, base_mva: float = 100.0) -> complex:
         """
         Get admittance in per-unit on system base.
-        Y_pu = Y_siemens * Z_base = Y_siemens * (V_base^2 / S_base)
+        
+        Since admittance is already calculated in Siemens from MW/Mvar and kV,
+        we just need to scale to per-unit:
+        Y_pu = Y_siemens * Z_base = Y_siemens * (V_base² / S_base)
         """
         if self.voltage_kv > 0:
             z_base = (self.voltage_kv ** 2) / base_mva
             return self.admittance * z_base
         return self.admittance
+    
+    def get_detailed_admittance_siemens(self) -> complex:
+        """
+        Calculate admittance from detailed layout parameters (R, L, C).
+        
+        Use this method if you need the impedance-based model instead of
+        the power-based model. This is more accurate for frequency-dependent
+        analysis but requires all layout parameters to be available.
+        
+        Returns:
+            Complex admittance in Siemens
+        """
+        if self.filter_type == ShuntFilterType.R_L_C:
+            # Series R-L-C tuned filter
+            # At system frequency: Z = R + j(X_L - X_C)
+            R = self.rrea_ohm * self.ncapa
+            X_L = self.xrea_ohm * self.ncapa
+            
+            # X_C = 1/B_C where B_C is susceptance
+            B_C = self.bcap_us * 1e-6 * self.ncapa
+            X_C = 1 / B_C if B_C > 0 else 0.0
+            
+            Z_total = complex(R, X_L - X_C)
+            if abs(Z_total) < 1e-12:
+                return complex(0, 0)
+            return 1 / Z_total
+        
+        elif self.filter_type == ShuntFilterType.R_L:
+            # Series R-L reactor
+            R = self.rrea_ohm * self.nreaa
+            X = self.xrea_ohm * self.nreaa
+            
+            if R == 0 and X == 0:
+                return complex(0, 0)
+            
+            Z = complex(R, X)
+            return 1 / Z
+        
+        elif self.filter_type == ShuntFilterType.C:
+            # Pure capacitor bank
+            B = self.bcap_us * 1e-6 * self.ncapa
+            return complex(0, B)
+        
+        else:
+            # For other types, fall back to power-based calculation
+            return self.admittance
