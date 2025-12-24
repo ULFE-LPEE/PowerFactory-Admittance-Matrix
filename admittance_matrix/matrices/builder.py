@@ -99,7 +99,7 @@ def build_admittance_matrix(
                     global_j = local_to_global[local_j]
                     Y[global_i, global_j] += local_matrix[local_i][local_j]
     
-    # Add shunt filters (passive network elements always present)
+    # Add shunt filters (passive network elements - always included in Y-matrix)
     for shunt in shunts:
         if type(shunt).__name__ == 'ShuntFilterShunt':
             i = bus_idx[shunt.bus_name]

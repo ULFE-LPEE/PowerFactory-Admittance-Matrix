@@ -215,7 +215,7 @@ def get_network_elements(app) -> tuple[list[BranchElement], list[ShuntElement], 
                 dutap=dutap,
                 phitr=phitr
             )
-        
+
         # Number of parallel transformers
         n_parallel = getattr(trafo, 'ntnum')
         branches.append(TransformerBranch(
@@ -529,49 +529,59 @@ def get_network_elements(app) -> tuple[list[BranchElement], list[ShuntElement], 
             continue
         
         # Get filter type
-        shtype = getattr(shnt, 'shtype') 
+        shtype = getattr(shnt, 'shtype', 2)  # Default to capacitor (type 2)
         try:
             filter_type = ShuntFilterType(shtype)
         except ValueError:
             filter_type = ShuntFilterType.C
         
-        # Get active steps
-        try:
-            n_cap = shnt.GetAttribute("ncap_a") or 1.0
-        except Exception:
-            n_cap = 1.0
+        # Get actual power output (this is what matters for Y-matrix)
+        # Qact is the actual reactive power at current operating point
+        q_mvar = getattr(shnt, 'Qact', 0.0) or 0.0
+        p_mw = getattr(shnt, 'Pact', 0.0) or 0.0  # Usually small (losses)
         
-        try:
-            n_rea = shnt.GetAttribute("nrea_a") or 1.0
-        except Exception:
-            n_rea = 1.0
+        # Controller parameters
+        ncapx = getattr(shnt, 'ncapx', 1) or 1  # Max capacitor steps
+        ncapa = getattr(shnt, 'ncapa', 1) or 1  # Active capacitor steps
+        nreax = getattr(shnt, 'nreax', 1) or 1  # Max reactor steps
+        nreaa = getattr(shnt, 'nreaa', 1) or 1  # Active reactor steps
         
-        # Get R-L-C parameters (per step)
+        # Design parameters (for reference)
+        qtotn_mvar = getattr(shnt, 'qtotn', 0.0) or 0.0  # Rated Q per step (type 0)
+        qrean_mvar = getattr(shnt, 'qrean', 0.0) or 0.0  # Rated Q_L per step (type 1)
+        fres_hz = getattr(shnt, 'fres', 0.0) or 0.0      # Resonant frequency
+        
+        # Quality factor - different attribute names for different types
+        if filter_type == ShuntFilterType.R_L_C:
+            quality_factor = getattr(shnt, 'greaf0', 0.0) or 0.0
+        elif filter_type == ShuntFilterType.R_L:
+            quality_factor = getattr(shnt, 'grea', 0.0) or 0.0
+        else:
+            quality_factor = 0.0
+        
+        # Layout parameters per step (for detailed modeling if needed)
         bcap_us = getattr(shnt, 'bcap', 0.0) or 0.0
         xrea_ohm = getattr(shnt, 'xrea', 0.0) or 0.0
         rrea_ohm = getattr(shnt, 'rrea', 0.0) or 0.0
-        gparac_us = getattr(shnt, 'gparac', 0.0) or 0.0
-
-        # High-pass filter parameters
-        c1_uf = getattr(shnt, 'c1', 0.0) or 0.0
-        c2_uf = getattr(shnt, 'c2', 0.0) or 0.0
-        rpara_ohm = getattr(shnt, 'rpara', 0.0) or 0.0
         
         shunts.append(ShuntFilterShunt(
             name=shnt.loc_name,
             bus_name=get_bus_full_name(bus),
             voltage_kv=bus.uknom,
             filter_type=filter_type,
-            n_cap=n_cap,
-            n_rea=n_rea,
+            q_mvar=q_mvar,
+            p_mw=p_mw,
+            ncapx=ncapx,
+            ncapa=ncapa,
+            nreax=nreax,
+            nreaa=nreaa,
+            qtotn_mvar=qtotn_mvar,
+            qrean_mvar=qrean_mvar,
+            fres_hz=fres_hz,
+            quality_factor=quality_factor,
             bcap_us=bcap_us,
             xrea_ohm=xrea_ohm,
-            rrea_ohm=rrea_ohm,
-            gparac_us=gparac_us,
-            c1_uf=c1_uf,
-            c2_uf=c2_uf,
-            rpara_ohm=rpara_ohm,
-            f_sys=50.0
+            rrea_ohm=rrea_ohm
         ))
 
     # --- Three-winding Transformers (ElmTr3) ---
@@ -611,15 +621,42 @@ def get_network_elements(app) -> tuple[list[BranchElement], list[ShuntElement], 
         
         # Get transformer type data
         pf_type = trafo.GetAttribute("typ_id")
-        rated_mva = 0.0
+        
+        # Initialize default values
+        rated_power_hv = 0.0
+        rated_power_mv = 0.0
+        rated_power_lv = 0.0
         hv_kv = 0.0
         mv_kv = 0.0
         lv_kv = 0.0
+        uk_hm = 0.0
+        uk_ml = 0.0
+        uk_lh = 0.0
+        ukr_hm = 0.0
+        ukr_ml = 0.0
+        ukr_lh = 0.0
+        
         if pf_type is not None:
-            rated_mva = pf_type.strn3_h if hasattr(pf_type, 'strn3_h') else 0.0
+            # Rated powers for each winding (MVA)
+            rated_power_hv = pf_type.strn3_h if hasattr(pf_type, 'strn3_h') else 0.0
+            rated_power_mv = pf_type.strn3_m if hasattr(pf_type, 'strn3_m') else 0.0
+            rated_power_lv = pf_type.strn3_l if hasattr(pf_type, 'strn3_l') else 0.0
+            
+            # Rated voltages for each winding (kV)
             hv_kv = pf_type.utrn3_h if hasattr(pf_type, 'utrn3_h') else 0.0
             mv_kv = pf_type.utrn3_m if hasattr(pf_type, 'utrn3_m') else 0.0
             lv_kv = pf_type.utrn3_l if hasattr(pf_type, 'utrn3_l') else 0.0
+            
+            # Short-circuit voltages (uk) in % for each pair
+            # uktr3_h: HV-MV pair, uktr3_m: MV-LV pair, uktr3_l: LV-HV pair
+            uk_hm = pf_type.uktr3_h if hasattr(pf_type, 'uktr3_h') else 0.0
+            uk_ml = pf_type.uktr3_m if hasattr(pf_type, 'uktr3_m') else 0.0
+            uk_lh = pf_type.uktr3_l if hasattr(pf_type, 'uktr3_l') else 0.0
+            
+            # Real parts of short-circuit voltages (ukr) in % for each pair
+            ukr_hm = pf_type.uktrr3_h if hasattr(pf_type, 'uktrr3_h') else 0.0
+            ukr_ml = pf_type.uktrr3_m if hasattr(pf_type, 'uktrr3_m') else 0.0
+            ukr_lh = pf_type.uktrr3_l if hasattr(pf_type, 'uktrr3_l') else 0.0
         
         # Get HV side tap changer parameters
         tap_changer_hv: TapChanger | None = None
@@ -649,17 +686,24 @@ def get_network_elements(app) -> tuple[list[BranchElement], list[ShuntElement], 
         n_parallel = getattr(trafo, 'ntnum', 1) or 1
         
         transformers_3w.append(Transformer3WBranch(
-            pf_object=trafo,
             name=trafo.loc_name,
             hv_bus_name=get_bus_full_name(hv_bus),
             mv_bus_name=get_bus_full_name(mv_bus),
             lv_bus_name=get_bus_full_name(lv_bus),
             base_mva=100.0,
             n_parallel=n_parallel,
-            rated_power_mva=rated_mva,
+            rated_power_hv_mva=rated_power_hv,
+            rated_power_mv_mva=rated_power_mv,
+            rated_power_lv_mva=rated_power_lv,
             hv_kv=hv_kv,
             mv_kv=mv_kv,
             lv_kv=lv_kv,
+            uk_hm_percent=uk_hm,
+            uk_ml_percent=uk_ml,
+            uk_lh_percent=uk_lh,
+            ukr_hm_percent=ukr_hm,
+            ukr_ml_percent=ukr_ml,
+            ukr_lh_percent=ukr_lh,
             tap_changer_hv=tap_changer_hv,
             tap_pos_hv=tap_pos_hv
         ))
