@@ -83,18 +83,23 @@ def build_admittance_matrix(
         Y[j, i] += Yji
     
     # Process 3-winding transformers
+    # Use the local 3x3 admittance matrix directly (star model with Kron reduction)
     if transformers_3w:
         for t3w in transformers_3w:
-            contributions = t3w.get_y_matrix_contributions(base_mva)
-            for (bus_from, bus_to), (Yii, Yjj, Yij, Yji) in contributions.items():
-                i = bus_idx[bus_from]
-                j = bus_idx[bus_to]
-                Y[i, i] += Yii
-                Y[j, j] += Yjj
-                Y[i, j] += Yij
-                Y[j, i] += Yji
+            # Get the complete 3x3 local admittance matrix
+            local_matrix, local_bus_names = t3w.get_local_admittance_matrix()
+            
+            # Map local bus indices to global indices
+            local_to_global = [bus_idx[name] for name in local_bus_names]
+            
+            # Add local matrix entries to global Y matrix
+            for local_i in range(3):
+                global_i = local_to_global[local_i]
+                for local_j in range(3):
+                    global_j = local_to_global[local_j]
+                    Y[global_i, global_j] += local_matrix[local_i][local_j]
     
-    # Add shunt filters (passive network elements always present)
+    # Add shunt filters (passive network elements - always included in Y-matrix)
     for shunt in shunts:
         if type(shunt).__name__ == 'ShuntFilterShunt':
             i = bus_idx[shunt.bus_name]
