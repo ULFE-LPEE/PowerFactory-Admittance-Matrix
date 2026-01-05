@@ -61,11 +61,11 @@ For detailed debug output:
 
 import logging
 
-__version__ = "0.1.1"
+__version__ = "0.1.3"
 
 # Configure library logging (NullHandler prevents "No handler found" warnings)
 logging.getLogger(__name__).addHandler(logging.NullHandler())
-__author__ = "PowerFactory User"
+__author__ = "User"
 
 # Core classes
 from .core import (
