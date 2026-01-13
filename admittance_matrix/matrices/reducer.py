@@ -148,9 +148,6 @@ def reduce_to_generator_internal_buses(
     # === Build extended Y-matrix ===
     # Copy Y_stab and add source admittances to their bus diagonals
     Y_network = Y_stab.copy()
-    for i, source in enumerate(all_sources):
-        bus_i = source_bus_indices[i]
-        Y_network[bus_i, bus_i] += source_admittances[i]
     
     # Source internal bus block (diagonal)
     Y_source_diag = np.diag(source_admittances)
