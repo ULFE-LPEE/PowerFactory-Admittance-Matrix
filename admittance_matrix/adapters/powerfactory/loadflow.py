@@ -77,7 +77,7 @@ def _calculate_internal_voltage(
     terminal_voltage: complex,
     p_pu: float,
     q_pu: float,
-    xdss_pu: float
+    z_pu: complex
 ) -> tuple[complex, float, float]:
     """
     Calculate generator internal voltage E' behind sub-transient reactance.
@@ -88,7 +88,7 @@ def _calculate_internal_voltage(
         terminal_voltage: Complex terminal voltage (p.u.)
         p_pu: Active power on generator base (p.u.)
         q_pu: Reactive power on generator base (p.u.)
-        xdss_pu: Sub-transient reactance on generator base (p.u.)
+        x: Generator reactareactance on generator base (p.u.)
         
     Returns:
         Tuple of (E' complex, |E'|, angle in degrees)
@@ -97,8 +97,9 @@ def _calculate_internal_voltage(
         return complex(0, 0), 0.0, 0.0
     
     s_pu = complex(p_pu, q_pu)
-    z_pu = complex(0, xdss_pu)
+    print(terminal_voltage, s_pu, z_pu)
     internal_voltage = terminal_voltage + z_pu * (s_pu.conjugate() / terminal_voltage.conjugate())
+    # internal_voltage = terminal_voltage + z_pu * (s_pu / abs(terminal_voltage))
     magnitude = abs(internal_voltage)
     angle_deg = cmath.phase(internal_voltage) * 180 / cmath.pi
     
@@ -106,7 +107,7 @@ def _calculate_internal_voltage(
 
 def get_generator_data_from_pf(
     app,
-    shunts: list[ShuntElement],
+    shunts: list[GeneratorShunt],
     lf_results: dict[str, BusResult],
     base_mva: float = 100.0
 ) -> list[GeneratorResult]:
@@ -155,13 +156,14 @@ def get_generator_data_from_pf(
         if hasattr(s, 'rated_power_mva') and s.rated_power_mva > 0:
             p_pu = p_mw / s.rated_power_mva
             q_pu = q_mvar / s.rated_power_mva
-            z_pu_sys = complex(0, s.xdss_pu * base_mva / s.rated_power_mva)
+            # z_pu_sys = complex(0, s.z_pu * base_mva / s.rated_power_mva)
+            z_pu_sys = s.z_pu * base_mva / s.rated_power_mva
         else:
             p_pu = 0.0
             q_pu = 0.0
             z_pu_sys = complex(0, 0)
         internal_v, internal_v_mag, internal_v_angle = _calculate_internal_voltage(
-            voltage, p_pu, q_pu, s.xdss_pu
+            voltage, p_pu, q_pu, s.z_pu
         )
         
         # Get zone from cpZone attribute
@@ -177,7 +179,6 @@ def get_generator_data_from_pf(
             name=s.name,
             bus_name=s.bus_name,
             voltage=voltage,
-            xdss_pu=s.xdss_pu,
             impedance_pu=z_pu_sys,
             p_pu=p_pu,
             q_pu=q_pu,

@@ -34,7 +34,6 @@ class GeneratorResult:
     name: str
     bus_name: str
     voltage: complex          # Terminal voltage as complex phasor (p.u.)
-    xdss_pu: float           # Sub-transient reactance on generator base (p.u.)
     impedance_pu: complex    # Impedance on system base (p.u.)
     p_pu: float              # Active power on generator base (p.u.)
     q_pu: float              # Reactive power on generator base (p.u.)

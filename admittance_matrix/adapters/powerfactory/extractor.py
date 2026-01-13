@@ -375,8 +375,27 @@ def get_network_elements(app) -> tuple[list[BranchElement], list[ShuntElement], 
         
         rated_mva = pf_type.sgn if pf_type and hasattr(pf_type, 'sgn') else 0.0
         rated_kv = pf_type.ugn if pf_type and hasattr(pf_type, 'ugn') else 0.0
-        xdss = pf_type.xdss if pf_type and hasattr(pf_type, 'xdss') else 0.0
-        # xdss = pf_type.xstr if pf_type and hasattr(pf_type, 'xstr') else 0.0
+
+
+        # Read generator model in PF
+        model = pf_type.model_inp if pf_type and hasattr(pf_type, 'model_inp') else ""
+        if model == "cls":
+            # Classical model
+            rstr = pf_type.rstr if pf_type and hasattr(pf_type, 'rstr') else 0.0
+            xstr = pf_type.xstr if pf_type and hasattr(pf_type, 'xstr') else 0.0
+            z_pu = complex(rstr, xstr)
+        if model == "det":
+            # Standard model
+            rstr = pf_type.rstr if pf_type and hasattr(pf_type, 'rstr') else 0.0
+            xdss = pf_type.xdss if pf_type and hasattr(pf_type, 'xdss') else 0.0
+            xqss = pf_type.xqss if pf_type and hasattr(pf_type, 'xqss') else 0.0
+            z_pu = complex(rstr, xdss)
+        else:
+            # Default to classical model
+            rstr = pf_type.rstr if pf_type and hasattr(pf_type, 'rstr') else 0.0
+            xstr = pf_type.xstr if pf_type and hasattr(pf_type, 'xstr') else 0.0
+            z_pu = complex(rstr, xstr)
+            logger.info(f" Generator '{gen.loc_name}': Unknown model '{model}', defaulting to classical model")
         
         shunts.append(GeneratorShunt(
             name=gen.loc_name,
@@ -384,7 +403,7 @@ def get_network_elements(app) -> tuple[list[BranchElement], list[ShuntElement], 
             voltage_kv=bus.uknom,
             rated_power_mva=rated_mva,
             rated_voltage_kv=rated_kv,
-            xdss_pu=xdss
+            z_pu = z_pu
         ))
 
     # --- Shunt elements: Loads (ElmLod) ---
