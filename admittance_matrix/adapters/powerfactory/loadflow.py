@@ -14,40 +14,6 @@ from ...core.elements import ShuntElement, GeneratorShunt, VoltageSourceShunt, E
 
 logger = logging.getLogger(__name__)
 
-
-def _calculate_internal_voltage(
-    terminal_voltage: complex,
-    p_pu: float,
-    q_pu: float,
-    xdss_pu: float
-) -> tuple[complex, float, float]:
-    """
-    Calculate generator internal voltage E' behind sub-transient reactance.
-    
-    E' = V + jX''d × (S*/V*)
-    
-    Args:
-        terminal_voltage: Complex terminal voltage (p.u.)
-        p_pu: Active power on generator base (p.u.)
-        q_pu: Reactive power on generator base (p.u.)
-        xdss_pu: Sub-transient reactance on generator base (p.u.)
-        
-    Returns:
-        Tuple of (E' complex, |E'|, angle in degrees)
-    """
-    if abs(terminal_voltage) == 0:
-        return complex(0, 0), 0.0, 0.0
-    
-    s_pu = complex(p_pu, q_pu)
-    z_pu = complex(0, xdss_pu)
-    
-    internal_voltage = terminal_voltage + z_pu * (s_pu.conjugate() / terminal_voltage.conjugate())
-    magnitude = abs(internal_voltage)
-    angle_deg = cmath.phase(internal_voltage) * 180 / cmath.pi
-    
-    return internal_voltage, magnitude, angle_deg
-
-
 def run_load_flow(app) -> bool:
     """
     Execute load flow calculation in PowerFactory.
@@ -107,6 +73,36 @@ def get_load_flow_results(app) -> dict[str, BusResult]:
     
     return results
 
+def _calculate_internal_voltage(
+    terminal_voltage: complex,
+    p_pu: float,
+    q_pu: float,
+    xdss_pu: float
+) -> tuple[complex, float, float]:
+    """
+    Calculate generator internal voltage E' behind sub-transient reactance.
+    
+    E' = V + jX''d × (S*/V*)
+    
+    Args:
+        terminal_voltage: Complex terminal voltage (p.u.)
+        p_pu: Active power on generator base (p.u.)
+        q_pu: Reactive power on generator base (p.u.)
+        xdss_pu: Sub-transient reactance on generator base (p.u.)
+        
+    Returns:
+        Tuple of (E' complex, |E'|, angle in degrees)
+    """
+    if abs(terminal_voltage) == 0:
+        return complex(0, 0), 0.0, 0.0
+    
+    s_pu = complex(p_pu, q_pu)
+    z_pu = complex(0, xdss_pu)
+    internal_voltage = terminal_voltage + z_pu * (s_pu.conjugate() / terminal_voltage.conjugate())
+    magnitude = abs(internal_voltage)
+    angle_deg = cmath.phase(internal_voltage) * 180 / cmath.pi
+    
+    return internal_voltage, magnitude, angle_deg
 
 def get_generator_data_from_pf(
     app,
@@ -144,13 +140,13 @@ def get_generator_data_from_pf(
         if bus_result is None:
             logger.warning(f" No load flow result for bus {s.bus_name}, skipping generator {s.name}")
             continue
-        
-        voltage = bus_result.voltage_complex
-        
         # Get PowerFactory object for this generator
         pf_gen = gen_pf_map.get(s.name)
         if pf_gen is None:
             continue
+
+        # voltage = bus_result.voltage_complex
+        voltage = bus_result.voltage_complex
         
         # Get P and Q from load flow results
         p_mw = pf_gen.GetAttribute("m:P:bus1")
@@ -164,7 +160,6 @@ def get_generator_data_from_pf(
             p_pu = 0.0
             q_pu = 0.0
             z_pu_sys = complex(0, 0)
-        
         internal_v, internal_v_mag, internal_v_angle = _calculate_internal_voltage(
             voltage, p_pu, q_pu, s.xdss_pu
         )
@@ -262,7 +257,6 @@ def get_voltage_source_data_from_pf(
         
         internal_v_mag = abs(internal_v)
         internal_v_angle = cmath.phase(internal_v) * 180 / cmath.pi
-        
         results.append(VoltageSourceResult(
             name=s.name,
             bus_name=s.bus_name,
