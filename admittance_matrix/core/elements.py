@@ -901,18 +901,15 @@ class GeneratorShunt(ShuntElement):
     """Synchronous generator - transient/sub-transient reactance model."""
     rated_power_mva: float = 0.0
     rated_voltage_kv: float = 0.0
-    xdss_pu: float = 0.0  # Sub-transient reactance on generator base
+    z_pu: float = 0.0  # Sub-transient reactance on generator base
     
     def __post_init__(self):
         """Calculate generator admittance behind sub-transient reactance."""
-        if self.xdss_pu > 0 and self.rated_power_mva > 0 and self.rated_voltage_kv > 0:
-            # Calculate impedance in ohms
-            z_base = (self.rated_voltage_kv ** 2) / self.rated_power_mva
-            x_ohms = self.xdss_pu * z_base
-            self.admittance = complex(0, -1 / x_ohms)
-        else:
-            # Use small non-zero value to avoid numerical instabilities in matrix reduction
-            self.admittance = complex(1e-12, -1e-12)
+        # Calculate impedance in ohms
+        z_base = (self.rated_voltage_kv ** 2) / self.rated_power_mva
+        z_ohms = self.z_pu * z_base
+        self.admittance = 1 / z_ohms
+
 
 @dataclass
 class ExternalGridShunt(ShuntElement):
