@@ -384,11 +384,10 @@ def get_network_elements(app) -> tuple[list[BranchElement], list[ShuntElement], 
             rstr = pf_type.rstr if pf_type and hasattr(pf_type, 'rstr') else 0.0
             xstr = pf_type.xstr if pf_type and hasattr(pf_type, 'xstr') else 0.0
             z_pu = complex(rstr, xstr)
-        if model == "det":
+        elif model == "det":
             # Standard model
             rstr = pf_type.rstr if pf_type and hasattr(pf_type, 'rstr') else 0.0
             xdss = pf_type.xdss if pf_type and hasattr(pf_type, 'xdss') else 0.0
-            xqss = pf_type.xqss if pf_type and hasattr(pf_type, 'xqss') else 0.0
             z_pu = complex(rstr, xdss)
         else:
             # Default to classical model

@@ -98,7 +98,7 @@ def build_admittance_matrix(
                 for local_j in range(3):
                     global_j = local_to_global[local_j]
                     Y[global_i, global_j] += local_matrix[local_i][local_j]
-    
+
     # Add shunt filters (passive network elements - always included in Y-matrix)
     for shunt in shunts:
         if type(shunt).__name__ == 'ShuntFilterShunt':
@@ -120,7 +120,6 @@ def build_admittance_matrix(
             if shunt_type != 'ShuntFilterShunt':  # Already added above
                 i = bus_idx[shunt.bus_name]
                 Y[i, i] += shunt.get_admittance_pu(base_mva)
-    
     return Y, bus_idx
 
 def get_generator_buses(shunts: list[ShuntElement]) -> list[str]:
