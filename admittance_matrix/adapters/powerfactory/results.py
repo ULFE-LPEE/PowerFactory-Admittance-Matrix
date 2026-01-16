@@ -9,7 +9,6 @@ This module contains result data structures for:
 """
 
 from dataclasses import dataclass
-import cmath
 import math
 
 
@@ -53,6 +52,8 @@ class VoltageSourceResult:
     bus_name: str
     voltage: complex          # Terminal voltage as complex phasor (p.u.)
     impedance_pu: complex     # Internal impedance on system base (p.u.)
+    p_pu: float              # Active power on system base (p.u.)
+    q_pu: float              # Reactive power on system base (p.u.)
     internal_voltage: complex # Internal voltage (behind impedance)
     internal_voltage_mag: float  # |E| magnitude (p.u.)
     internal_voltage_angle: float  # E angle (degrees)
@@ -66,6 +67,8 @@ class ExternalGridResult:
     bus_name: str
     voltage: complex          # Terminal voltage as complex phasor (p.u.)
     impedance_pu: complex     # Internal impedance on system base (p.u.)
+    p_pu: float              # Active power on system base (p.u.)
+    q_pu: float              # Reactive power on system base (p.u.)
     internal_voltage: complex # Internal voltage (behind impedance)
     internal_voltage_mag: float  # |E| magnitude (p.u.)
     internal_voltage_angle: float  # E angle (degrees)

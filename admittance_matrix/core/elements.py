@@ -1028,6 +1028,7 @@ class ShuntFilterShunt(ShuntElement):
         
         Y = (P - jQ) / V²  [Siemens]
         """
+        # TODO: Needs further developemnt, currently just taking active power of the filter for admittance
         if self.voltage_kv > 0:
             v_sq = self.voltage_kv ** 2  # kV² = MW/S = Mvar/S
             # Complex power S = P + jQ, admittance Y = S* / |V|² = (P - jQ) / V²

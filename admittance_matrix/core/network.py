@@ -155,12 +155,12 @@ class Network:
         if self._Y_reduced is not None:
             self.reduce_to_generators()
     
-    def _build_matrices(self, include_generators: bool = True) -> None:
+    def _build_matrices(self, include_generators: bool = False) -> None:
         """
         Build admittance matrices from the network elements.
         
         Args:
-            include_generators: If True, include generator admittances in diagonal
+            include_generators: If True, include generator admittances in diagonal. Set to false if calculating synchronizing power coefficients for outage of Generator.
         """
         # Build load flow matrix (network only)
         self._Y_lf, self.bus_idx = build_admittance_matrix(
@@ -218,7 +218,8 @@ class Network:
     def reduce_to_generators(
         self,
         include_voltage_sources: bool = True,
-        include_external_grids: bool = True
+        include_external_grids: bool = True,
+        outage_source_name: str | None = None
     ) -> None:
         """
         Apply Kron reduction to obtain generator internal bus matrix.
@@ -231,6 +232,7 @@ class Network:
         Args:
             include_voltage_sources: If True, include AC voltage sources in reduction
             include_external_grids: If True, include external grids in reduction
+            outage_source_name: If provided, exclude this source's admittance from network
         """
         self._hide()
         if self._Y_stab is None:
@@ -239,7 +241,8 @@ class Network:
         self._Y_reduced, self.gen_names, self.source_types = reduce_to_generator_internal_buses(
             self._Y_stab, self.bus_idx, self.shunts, self.base_mva,
             include_voltage_sources=include_voltage_sources,
-            include_external_grids=include_external_grids
+            include_external_grids=include_external_grids,
+            outage_source_name=outage_source_name
         )
 
         self._show()

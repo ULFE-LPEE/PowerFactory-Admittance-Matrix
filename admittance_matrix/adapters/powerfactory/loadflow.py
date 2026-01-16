@@ -97,7 +97,6 @@ def _calculate_internal_voltage(
         return complex(0, 0), 0.0, 0.0
     
     s_pu = complex(p_pu, q_pu)
-    print(terminal_voltage, s_pu, z_pu)
     internal_voltage = terminal_voltage + z_pu * (s_pu.conjugate() / terminal_voltage.conjugate())
     # internal_voltage = terminal_voltage + z_pu * (s_pu / abs(terminal_voltage))
     magnitude = abs(internal_voltage)
@@ -152,7 +151,6 @@ def get_generator_data_from_pf(
         # Get P and Q from load flow results
         p_mw = pf_gen.GetAttribute("m:P:bus1")
         q_mvar = pf_gen.GetAttribute("m:Q:bus1")
-        
         if hasattr(s, 'rated_power_mva') and s.rated_power_mva > 0:
             p_pu = p_mw / s.rated_power_mva
             q_pu = q_mvar / s.rated_power_mva
@@ -165,7 +163,6 @@ def get_generator_data_from_pf(
         internal_v, internal_v_mag, internal_v_angle = _calculate_internal_voltage(
             voltage, p_pu, q_pu, s.z_pu
         )
-        
         # Get zone from cpZone attribute
         zone_name = 'Unknown'
         try:
@@ -258,11 +255,19 @@ def get_voltage_source_data_from_pf(
         
         internal_v_mag = abs(internal_v)
         internal_v_angle = cmath.phase(internal_v) * 180 / cmath.pi
+
+        # # Set internal voltage magnitude and angle from terminal voltage
+        # # (for voltage sources without impedance or as fallback)
+        # internal_v_mag = abs(voltage)
+        # internal_v_angle = cmath.phase(voltage) * 180 / cmath.pi
+
         results.append(VoltageSourceResult(
             name=s.name,
             bus_name=s.bus_name,
             voltage=voltage,
             impedance_pu=z_pu_sys,
+            p_pu=p_mw / base_mva,
+            q_pu=q_mvar / base_mva,
             internal_voltage=internal_v,
             internal_voltage_mag=internal_v_mag,
             internal_voltage_angle=internal_v_angle
@@ -343,11 +348,17 @@ def get_external_grid_data_from_pf(
         internal_v_mag = abs(internal_v)
         internal_v_angle = cmath.phase(internal_v) * 180 / cmath.pi
         
+        # # Set internal voltage magnitude and angle from terminal voltage
+        # # (for voltage sources without impedance or as fallback)
+        # internal_v_mag = abs(voltage)
+        # internal_v_angle = cmath.phase(voltage) * 180 / cmath.pi
         results.append(ExternalGridResult(
             name=s.name,
             bus_name=s.bus_name,
             voltage=voltage,
             impedance_pu=z_pu_sys,
+            p_pu=p_mw / base_mva,
+            q_pu=q_mvar / base_mva,
             internal_voltage=internal_v,
             internal_voltage_mag=internal_v_mag,
             internal_voltage_angle=internal_v_angle
