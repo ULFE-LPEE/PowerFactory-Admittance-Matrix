@@ -20,6 +20,12 @@ class TapChangerType(Enum):
     SYM_PHASE = 2       # Symmetric phase shifter
 
 
+class LoadModelType(Enum):
+    """Load model type enumeration."""
+    CONSTANT_IMPEDANCE = 0  # Z = const, P,Q vary with V^2
+    CONSTANT_POWER = 1      # P,Q = const, Z varies with V^2
+
+
 @dataclass
 class TapChanger(ABC):
     """
@@ -827,20 +833,25 @@ class ShuntElement(ABC):
 @dataclass
 class LoadShunt(ShuntElement):
     """
-    Load element - constant impedance model.
+    Load element - supports constant impedance and constant power models.
     
-    For stability analysis, use update_admittance_with_lf_voltage() after
-    running load flow to recalculate admittance using actual bus voltage.
+    Load Model Types:
+    - CONSTANT_IMPEDANCE: Z = const, P and Q vary with V^2
+      For stability analysis, use update_admittance_with_lf_voltage() after
+      running load flow to recalculate admittance using actual bus voltage.
+    - CONSTANT_POWER: P and Q remain constant regardless of voltage.
+      The admittance is calculated at nominal voltage and does not change.
     """
     p_mw: float = 0.0
     q_mvar: float = 0.0
-    lf_voltage_kv: float = field(default=0.0, repr=False)  # Load flow voltage (set after LF)
+    lf_voltage_kv: float = field(default=1.0, repr=False)  # Load flow voltage (set after LF)
+    load_model: LoadModelType = LoadModelType.CONSTANT_IMPEDANCE
     
     def __post_init__(self):
         # Load: P + jQ -> Y = (P - jQ) / |V|^2
         # Initially use nominal voltage
         if self.voltage_kv > 0:
-            self.admittance = complex(self.p_mw, -self.q_mvar) / (self.voltage_kv ** 2)
+            self.admittance = complex(self.p_mw, -self.q_mvar) / (1 ** 2)
         else:
             self.admittance = complex(1e-12, 1e-12)
     
@@ -849,34 +860,38 @@ class LoadShunt(ShuntElement):
         Get admittance in per-unit on system base.
         Y_pu = Y_siemens * Z_base = Y_siemens * (V_base^2 / S_base)
         
-        Uses load flow voltage if available, otherwise nominal voltage.
+        For CONSTANT_IMPEDANCE: Uses load flow voltage if available.
+        For CONSTANT_POWER: Always uses nominal voltage (admittance doesn't change with V).
         """
-        # Use LF voltage if available, otherwise nominal
-        v_kv = self.lf_voltage_kv if self.lf_voltage_kv > 0 else self.voltage_kv
-        
-        # if v_kv > 0:
-        #     z_base = (v_kv ** 2) / base_mva
-        #     return self.admittance * z_base
         return self.admittance / base_mva
     
     def update_admittance_with_lf_voltage(self) -> None:
         """
         Recalculate admittance using load flow voltage.
         
-        Call this after running load flow to get accurate constant impedance
-        model for stability analysis. Uses lf_voltage_kv if set, otherwise
-        falls back to nominal voltage_kv.
-        """
-        # Use LF voltage if available, otherwise nominal
-        v_kv = self.lf_voltage_kv if self.lf_voltage_kv > 0 else self.voltage_kv
+        For CONSTANT_IMPEDANCE model:
+            Call this after running load flow to get accurate constant impedance
+            model for stability analysis. Uses lf_voltage_kv if set, otherwise
+            falls back to nominal voltage_kv.
         
+        For CONSTANT_POWER model:
+            This method has no effect - admittance is always calculated at nominal
+            voltage since P and Q are constant regardless of actual voltage.
+        """
+        # For constant power model, admittance doesn't change with voltage
+        if self.load_model == LoadModelType.CONSTANT_POWER:
+            return
+        
+        # Constant impedance: recalculate based on LF voltage
+        v_kv = self.lf_voltage_kv if self.lf_voltage_kv > 0 else self.voltage_kv
+
         if v_kv > 0:
             self.admittance = complex(self.p_mw, -self.q_mvar) / (v_kv ** 2)
         else:
             self.admittance = complex(1e-12, 1e-12)
     
     def set_lf_voltage(self, voltage_kv: float) -> None:
-        """Set the load flow voltage and recalculate admittance."""
+        """Set the load flow voltage and recalculate admittance (if constant impedance model)."""
         self.lf_voltage_kv = voltage_kv
         self.update_admittance_with_lf_voltage()
 
@@ -886,18 +901,14 @@ class GeneratorShunt(ShuntElement):
     """Synchronous generator - transient/sub-transient reactance model."""
     rated_power_mva: float = 0.0
     rated_voltage_kv: float = 0.0
-    xdss_pu: float = 0.0  # Sub-transient reactance on generator base
+    z_pu: float = 0.0  # Sub-transient reactance on generator base
     
     def __post_init__(self):
         """Calculate generator admittance behind sub-transient reactance."""
-        if self.xdss_pu > 0 and self.rated_power_mva > 0 and self.rated_voltage_kv > 0:
-            # Calculate impedance in ohms
-            z_base = (self.rated_voltage_kv ** 2) / self.rated_power_mva
-            x_ohms = self.xdss_pu * z_base
-            self.admittance = complex(0, -1 / x_ohms)
-        else:
-            # Use small non-zero value to avoid numerical instabilities in matrix reduction
-            self.admittance = complex(1e-12, -1e-12)
+        # Calculate impedance in ohms
+        z_base = (self.rated_voltage_kv ** 2) / self.rated_power_mva
+        z_ohms = self.z_pu * z_base
+        self.admittance = 1 / z_ohms
 
 
 @dataclass
@@ -1017,6 +1028,7 @@ class ShuntFilterShunt(ShuntElement):
         
         Y = (P - jQ) / V²  [Siemens]
         """
+        # TODO: Needs further developemnt, currently just taking active power of the filter for admittance
         if self.voltage_kv > 0:
             v_sq = self.voltage_kv ** 2  # kV² = MW/S = Mvar/S
             # Complex power S = P + jQ, admittance Y = S* / |V|² = (P - jQ) / V²
