@@ -76,7 +76,8 @@ def reduce_to_generator_internal_buses(
     shunts: list[ShuntElement],
     base_mva: float = 100.0,
     include_voltage_sources: bool = True,
-    include_external_grids: bool = False
+    include_external_grids: bool = False,
+    outage_source_name: str | None = None,
 ) -> tuple[np.ndarray, list[str], list[str]]:
     """
     Reduce stability Y-matrix to generator internal buses only.
@@ -141,14 +142,15 @@ def reduce_to_generator_internal_buses(
     # Get source data
     source_bus_indices = [bus_idx[s.bus_name] for s in all_sources]
     source_admittances = np.array([s.get_admittance_pu(base_mva) for s in all_sources], dtype=complex)
-
     logger.info(f"Source reduction: {len(generators)} generators, {len(voltage_sources)} voltage sources, "
                 f"{len(external_grids)} external grids = {n_sources} total")
     
     # === Build extended Y-matrix ===
     # Copy Y_stab and add source admittances to their bus diagonals
     Y_network = Y_stab.copy()
-    for i, source in enumerate(all_sources):
+    for i, src in enumerate(all_sources):
+        if src.name == outage_source_name:
+            continue  # Skip outaged source
         bus_i = source_bus_indices[i]
         Y_network[bus_i, bus_i] += source_admittances[i]
     

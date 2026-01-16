@@ -14,7 +14,7 @@ from ...core.elements import (
     BranchElement, ShuntElement,
     LineBranch, SwitchBranch, TransformerBranch, Transformer3WBranch,
     CommonImpedanceBranch, SeriesReactorBranch,
-    LoadShunt, GeneratorShunt, ExternalGridShunt, VoltageSourceShunt,
+    LoadShunt, LoadModelType, GeneratorShunt, ExternalGridShunt, VoltageSourceShunt,
     ShuntFilterShunt, ShuntFilterType,
     TapChanger, TapChangerType, RatioAsymTapChanger, IdealPhaseTapChanger, SymPhaseTapChanger
 )
@@ -375,7 +375,26 @@ def get_network_elements(app) -> tuple[list[BranchElement], list[ShuntElement], 
         
         rated_mva = pf_type.sgn if pf_type and hasattr(pf_type, 'sgn') else 0.0
         rated_kv = pf_type.ugn if pf_type and hasattr(pf_type, 'ugn') else 0.0
-        xdss = pf_type.xdss if pf_type and hasattr(pf_type, 'xdss') else 0.0
+
+
+        # Read generator model in PF
+        model = pf_type.model_inp if pf_type and hasattr(pf_type, 'model_inp') else ""
+        if model == "cls":
+            # Classical model
+            rstr = pf_type.rstr if pf_type and hasattr(pf_type, 'rstr') else 0.0
+            xstr = pf_type.xstr if pf_type and hasattr(pf_type, 'xstr') else 0.0
+            z_pu = complex(rstr, xstr)
+        elif model == "det":
+            # Standard model
+            rstr = pf_type.rstr if pf_type and hasattr(pf_type, 'rstr') else 0.0
+            xdss = pf_type.xdss if pf_type and hasattr(pf_type, 'xdss') else 0.0
+            z_pu = complex(rstr, xdss)
+        else:
+            # Default to classical model
+            rstr = pf_type.rstr if pf_type and hasattr(pf_type, 'rstr') else 0.0
+            xstr = pf_type.xstr if pf_type and hasattr(pf_type, 'xstr') else 0.0
+            z_pu = complex(rstr, xstr)
+            logger.info(f" Generator '{gen.loc_name}': Unknown model '{model}', defaulting to classical model")
         
         shunts.append(GeneratorShunt(
             name=gen.loc_name,
@@ -383,7 +402,7 @@ def get_network_elements(app) -> tuple[list[BranchElement], list[ShuntElement], 
             voltage_kv=bus.uknom,
             rated_power_mva=rated_mva,
             rated_voltage_kv=rated_kv,
-            xdss_pu=xdss
+            z_pu = z_pu
         ))
 
     # --- Shunt elements: Loads (ElmLod) ---
@@ -412,13 +431,26 @@ def get_network_elements(app) -> tuple[list[BranchElement], list[ShuntElement], 
         except Exception as e:
             logger.warning(f" Load '{load.loc_name}': Failed to get cubicle/terminal - {type(e).__name__}: {e}")
             continue
+
+        # Get load dynamic simulation model (# TODO: Add more load models)
+        ldtype = load.typ_id if hasattr(load, 'typ_id') else None
+        if ldtype is not None:
+            # Check for constant impedance load model
+            lodst = ldtype.lodst if hasattr(ldtype, 'lodst') else 0
+            if lodst == 100:
+                load_model = LoadModelType.CONSTANT_IMPEDANCE
+            else:
+                load_model = LoadModelType.CONSTANT_POWER
+        else:
+            load_model = LoadModelType.CONSTANT_IMPEDANCE  # Default to constant impedance
         
         shunts.append(LoadShunt(
             name=load.loc_name,
             bus_name=get_bus_full_name(bus),
             voltage_kv=bus.uknom,
             p_mw=load.plini*load.scale0,
-            q_mvar=load.qlini*load.scale0
+            q_mvar=load.qlini*load.scale0,
+            load_model=load_model
         ))
 
     # --- Shunt elements: External Grids (ElmXnet) ---

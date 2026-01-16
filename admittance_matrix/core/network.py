@@ -120,15 +120,47 @@ class Network:
                 # Get the load flow voltage for this bus
                 bus_name = shunt.bus_name
                 if bus_name in self.lf_results:
-                    lf_voltage_kv = self.lf_results[bus_name].voltage_kv
-                    shunt.set_lf_voltage(lf_voltage_kv)
+                    lf_voltage_pu = self.lf_results[bus_name].voltage_pu
+                    shunt.set_lf_voltage(lf_voltage_pu)
+    
+    def update_load_admittances_with_post_disturbance_voltage(self, load_voltages: dict[str, float]) -> None:
+        """
+        Update load admittances using post-disturbance voltages from RMS simulation.
+        
+        This allows recalculating power distribution ratios using the voltage
+        profile that exists after a generator trip, rather than the pre-disturbance
+        load flow voltages.
+        
+        Args:
+            load_voltages: Dictionary mapping load names to their voltage (kV) 
+                          at the disturbance time from RMS simulation results.
+        """
+        from ..core.elements import LoadShunt, GeneratorShunt
+        
+        updated_count = 0
+        for shunt in self.shunts:
+            if isinstance(shunt, LoadShunt):
+                if shunt.name in load_voltages:
+                    voltage_kv = load_voltages[shunt.name]
+                    shunt.set_lf_voltage(voltage_kv)
+                    updated_count += 1
+
+        if self.verbose:
+            print(f"Updated {updated_count} load admittances with post-disturbance voltages")
+        
+        # Rebuild matrices with updated load admittances
+        self._build_matrices()
+        
+        # Re-run Kron reduction if it was done before
+        if self._Y_reduced is not None:
+            self.reduce_to_generators()
     
     def _build_matrices(self, include_generators: bool = False) -> None:
         """
         Build admittance matrices from the network elements.
         
         Args:
-            include_generators: If True, include generator admittances in diagonal
+            include_generators: If True, include generator admittances in diagonal. Set to false if calculating synchronizing power coefficients for outage of Generator.
         """
         # Build load flow matrix (network only)
         self._Y_lf, self.bus_idx = build_admittance_matrix(
@@ -186,7 +218,8 @@ class Network:
     def reduce_to_generators(
         self,
         include_voltage_sources: bool = True,
-        include_external_grids: bool = True
+        include_external_grids: bool = True,
+        outage_source_name: str | None = None
     ) -> None:
         """
         Apply Kron reduction to obtain generator internal bus matrix.
@@ -199,6 +232,7 @@ class Network:
         Args:
             include_voltage_sources: If True, include AC voltage sources in reduction
             include_external_grids: If True, include external grids in reduction
+            outage_source_name: If provided, exclude this source's admittance from network
         """
         self._hide()
         if self._Y_stab is None:
@@ -207,7 +241,8 @@ class Network:
         self._Y_reduced, self.gen_names, self.source_types = reduce_to_generator_internal_buses(
             self._Y_stab, self.bus_idx, self.shunts, self.base_mva,
             include_voltage_sources=include_voltage_sources,
-            include_external_grids=include_external_grids
+            include_external_grids=include_external_grids,
+            outage_source_name=outage_source_name
         )
 
         self._show()

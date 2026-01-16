@@ -49,6 +49,9 @@ def calculate_power_distribution_ratios(
     # Build E magnitude and angle vectors
     E_abs = np.array([s.internal_voltage_mag for s in source_data]).reshape(-1, 1)
     E_angle = np.array([np.radians(s.internal_voltage_angle) for s in source_data]).reshape(-1, 1)
+
+    P_PU = np.array([s.p_pu for s in source_data]).reshape(-1, 1)
+    Q_PU = np.array([s.q_pu for s in source_data]).reshape(-1, 1)
     
     # Extract B and G from reduced Y-matrix
     B_K = np.imag(Y_reduced)
@@ -58,6 +61,16 @@ def calculate_power_distribution_ratios(
     
     # Calculate synchronizing power coefficients
     # K_ij = E_i * E_dist * (B_ij * cos(δ_i - δ_dist) - G_ij * sin(δ_i - δ_dist))
+
+    # Calculate power factor angle: arctan(Q/P) and convert to radians for use in calculations
+    pf_angle_rad = np.arctan2(Q_PU[dist_idx], P_PU[dist_idx])
+
+    # Get terminal voltage angle from source_data
+    terminal_voltage = source_data[dist_idx].voltage
+    terminal_voltage_angle_rad = np.angle(terminal_voltage)
+    E_angle[dist_idx] = -pf_angle_rad + terminal_voltage_angle_rad
+    print(f"E_angle[dist_idx] = -pf_angle + terminal_angle = {np.degrees(-pf_angle_rad)[0]:.2f} + {np.degrees(terminal_voltage_angle_rad):.2f} = {np.degrees(E_angle[dist_idx])[0]:.2f} degrees") #! Dev
+    
     angle_diff = E_angle - np.ones((n, 1)) * E_angle[dist_idx]
 
     K = (np.ones((n, n)) * E_abs[dist_idx] * E_abs * 
@@ -71,7 +84,7 @@ def calculate_power_distribution_ratios(
     
     # Set disturbance source's contribution to zero
     K_col[dist_idx] = 0
-    
+       
     # Calculate power distribution ratios
     total_K = np.sum(K_col)
     if total_K != 0:
