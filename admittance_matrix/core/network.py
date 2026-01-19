@@ -234,7 +234,6 @@ class Network:
             include_external_grids: If True, include external grids in reduction
             outage_source_name: If provided, exclude this source's admittance from network
         """
-        self._hide()
         if self._Y_stab is None:
             raise RuntimeError("Must call build_matrices() first")
         
@@ -244,8 +243,6 @@ class Network:
             include_external_grids=include_external_grids,
             outage_source_name=outage_source_name
         )
-
-        self._show()
     
     def calculate_power_ratios(self, disturbance_source_name: str) -> tuple[np.ndarray, list[str], list[str]]:
         """
@@ -297,6 +294,7 @@ class Network:
                 - source_types: List of source types (column types)
         """
         self._hide()
+
         if self._Y_reduced is None:
             raise RuntimeError("Must call reduce_to_generators() first")
         if self.gen_data is None:
@@ -317,6 +315,9 @@ class Network:
         
         for _, gen_name in enumerate(outage_generators):
             try:
+                # TODO: We might need to fix function call below because it takes very long time to compute in a loop...
+                self.reduce_to_generators(outage_source_name=gen_name)
+
                 ratios_i, source_names, source_types = calculate_power_distribution_ratios(
                     self._Y_reduced, self.source_data, gen_name
                 )

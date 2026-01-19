@@ -375,7 +375,7 @@ def get_network_elements(app) -> tuple[list[BranchElement], list[ShuntElement], 
         
         rated_mva = pf_type.sgn if pf_type and hasattr(pf_type, 'sgn') else 0.0
         rated_kv = pf_type.ugn if pf_type and hasattr(pf_type, 'ugn') else 0.0
-
+        n_parallel = gen.ngnum if gen and hasattr(gen, 'ngnum') else 1
 
         # Read generator model in PF
         model = pf_type.model_inp if pf_type and hasattr(pf_type, 'model_inp') else ""
@@ -402,7 +402,8 @@ def get_network_elements(app) -> tuple[list[BranchElement], list[ShuntElement], 
             voltage_kv=bus.uknom,
             rated_power_mva=rated_mva,
             rated_voltage_kv=rated_kv,
-            z_pu = z_pu
+            z_pu = z_pu,
+            n_parallel=n_parallel
         ))
 
     # --- Shunt elements: Loads (ElmLod) ---
