@@ -902,14 +902,14 @@ class GeneratorShunt(ShuntElement):
     rated_power_mva: float = 0.0
     rated_voltage_kv: float = 0.0
     z_pu: float = 0.0  # Sub-transient reactance on generator base
+    n_parallel: int = 1 # Number of parallel generators
     
     def __post_init__(self):
         """Calculate generator admittance behind sub-transient reactance."""
         # Calculate impedance in ohms
         z_base = (self.rated_voltage_kv ** 2) / self.rated_power_mva
-        z_ohms = self.z_pu * z_base
+        z_ohms = (self.z_pu * z_base) / self.n_parallel
         self.admittance = 1 / z_ohms
-
 
 @dataclass
 class ExternalGridShunt(ShuntElement):

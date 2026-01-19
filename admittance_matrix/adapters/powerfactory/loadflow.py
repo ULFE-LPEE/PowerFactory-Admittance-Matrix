@@ -161,7 +161,7 @@ def get_generator_data_from_pf(
             q_pu = 0.0
             z_pu_sys = complex(0, 0)
         internal_v, internal_v_mag, internal_v_angle = _calculate_internal_voltage(
-            voltage, p_pu, q_pu, s.z_pu
+            voltage, p_pu, q_pu, s.z_pu / s.n_parallel
         )
         # Get zone from cpZone attribute
         zone_name = 'Unknown'
