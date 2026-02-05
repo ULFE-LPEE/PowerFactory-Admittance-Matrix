@@ -96,12 +96,39 @@ def get_simulation_data(GEN_OUT: str, path: str, available_measurements: Optiona
 
     substraction = np.array(values_at_min_index) - np.array(values_before_min_index)
     
-    # Get the index of generator that was disturbed
-    gen_out_index = data.columns.get_loc(GEN_OUT)
-    substraction[gen_out_index - 1] = 0 # type: ignore
+    # # Get the index of generator that was disturbed
+    # gen_out_index = data.columns.get_loc(GEN_OUT)
+    # substraction[gen_out_index - 1] = 0 # type: ignore
 
-    # Create generator name order list (all generators from CSV)
-    generator_name_order = data.columns[1:].tolist()
+    # # Create generator name order list (all generators from CSV)
+    # generator_name_order = data.columns[1:].tolist()
+
+    # Find the column that contains GEN_OUT (handle prefix like "HDOB10\\HDOB-G3")
+    gen_out_column = None
+    for col in data.columns[1:]:
+        if col == GEN_OUT or col.endswith(f"\\{GEN_OUT}") or col.endswith(f"\\\\{GEN_OUT}"):
+            gen_out_column = col
+            break
+    
+    if gen_out_column is None:
+        raise ValueError(f"Generator '{GEN_OUT}' not found in CSV columns. Available columns: {data.columns.tolist()}")
+    
+    # Get the index of generator that was disturbed
+    gen_out_index = data.columns.get_loc(gen_out_column)
+    substraction[gen_out_index - 1] = 0 # type: ignore
+    
+    # Create generator name order list (extract actual names from full paths)
+    all_column_names = data.columns[1:].tolist()
+    generator_name_order = []
+    for col in all_column_names:
+        # Extract name after last backslash if it exists
+        if '\\' in col:
+            gen_name = col.split('\\')[-1]
+        else:
+            gen_name = col
+        generator_name_order.append(gen_name)
+    
+    print(f"Generator name order: {generator_name_order}") #! Dev
     
     # Filter to only available measurements if specified
     if available_measurements is not None:
@@ -114,7 +141,7 @@ def get_simulation_data(GEN_OUT: str, path: str, available_measurements: Optiona
     
     # print(sum(substraction)) #! Dev
     rdP = substraction / sum(substraction)
-    print("Sum of substraction:", sum(substraction)) #! Dev
+    # print("Sum of substraction:", sum(substraction)) #! Dev
 
     return rdP, generator_name_order, data
 
@@ -322,8 +349,6 @@ def obtain_rms_results(app: pf.Application, filesPath: str, pfResultsName: str =
 
     # Only create switch events for generators (not voltage sources)
     for gen in generators:
-        # if (gen.GetAttribute("loc_name") != "Mar. Otok Gen1"):
-        #     continue
         iteration += 1
 
         gen_name = gen.GetAttribute("loc_name")

@@ -10,8 +10,6 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from enum import Enum
 import math
-import numpy as np
-
 
 class TapChangerType(Enum):
     """Tap changer type enumeration matching PowerFactory tapchtype."""
@@ -19,12 +17,10 @@ class TapChangerType(Enum):
     IDEAL_PHASE = 1     # Ideal phase shifter
     SYM_PHASE = 2       # Symmetric phase shifter
 
-
 class LoadModelType(Enum):
     """Load model type enumeration."""
     CONSTANT_IMPEDANCE = 0  # Z = const, P,Q vary with V^2
     CONSTANT_POWER = 1      # P,Q = const, Z varies with V^2
-
 
 @dataclass
 class TapChanger(ABC):
@@ -60,7 +56,6 @@ class TapChanger(ABC):
     def tap_type(self) -> TapChangerType:
         """Return the tap changer type."""
         pass
-
 
 @dataclass
 class RatioAsymTapChanger(TapChanger):
@@ -104,7 +99,6 @@ class RatioAsymTapChanger(TapChanger):
         
         return tap_ratio
 
-
 @dataclass
 class IdealPhaseTapChanger(TapChanger):
     """
@@ -139,7 +133,6 @@ class IdealPhaseTapChanger(TapChanger):
         tap_ratio = complex(math.cos(phi_rad), math.sin(phi_rad))
         
         return tap_ratio
-
 
 @dataclass
 class SymPhaseTapChanger(TapChanger):
@@ -218,7 +211,6 @@ class BranchElement(ABC):
         y = self.get_admittance_pu(base_mva) if base_mva else self.admittance
         return (y, y, -y, -y)
 
-
 @dataclass
 class LineBranch(BranchElement):
     """Transmission/distribution line element."""
@@ -248,7 +240,6 @@ class LineBranch(BranchElement):
         # Diagonal includes series + shunt, off-diagonal is just series
         return (y + y_shunt, y + y_shunt, -y, -y)
 
-
 @dataclass
 class SwitchBranch(BranchElement):
     """Switch/Coupler element."""
@@ -261,7 +252,6 @@ class SwitchBranch(BranchElement):
         else:
             self.admittance = complex(0, 0)
 
-
 @dataclass
 class TransformerBranch(BranchElement):
     """
@@ -270,7 +260,8 @@ class TransformerBranch(BranchElement):
     Uses the standard transformer pi-model with off-nominal tap ratio.
     The model accounts for:
     - Series impedance (R + jX) on transformer base
-    - Complex tap ratio (t) - includes magnitude and phase shift from tap changer
+    - Complex tap ratio (t) - includes magnitude and phase shift from tap changer AND vector group
+    - Vector group phase shift (inherent winding configuration phase shift)
     - Magnetizing admittance (optional)
     - Number of parallel transformers (ntnum)
     
@@ -289,15 +280,35 @@ class TransformerBranch(BranchElement):
     reactance_pu: float = 0.0   # X on transformer base (p.u.)
     tap_changer: TapChanger | None = None  # Tap changer object
     tap_pos: int = 0             # Current tap position
+    vector_group_shift_deg: int = 0  # Vector group phase shift in degrees (nt2ag * 30)
     magnetizing_admittance: complex = field(default=complex(0, 0))  # Y_m in p.u.
     n_parallel: int = 1  # Number of parallel transformers (ntnum in PowerFactory)
     
     @property
     def tap_ratio(self) -> complex:
-        """Get the complex tap ratio from the tap changer."""
+        """
+        Get the complex tap ratio combining tap changer and vector group phase shift.
+        
+        Total tap ratio: t_total = t_tap * e^(j*φ_vg)
+        where:
+        - t_tap is the tap changer ratio (magnitude and phase)
+        - φ_vg is the vector group phase shift in radians
+        
+        The vector group shift is applied as a rotation from HV to LV side.
+        """
+        # Get tap changer ratio (or 1.0 if no tap changer)
         if self.tap_changer is not None:
-            return self.tap_changer.get_complex_tap_ratio(self.tap_pos)
-        return complex(1.0, 0.0)
+            t_tap = self.tap_changer.get_complex_tap_ratio(self.tap_pos)
+        else:
+            t_tap = complex(1.0, 0.0)
+        
+        # Apply vector group phase shift
+        if self.vector_group_shift_deg != 0:
+            phi_vg_rad = math.radians(self.vector_group_shift_deg)
+            vg_shift = complex(math.cos(phi_vg_rad), math.sin(phi_vg_rad))
+            return t_tap * vg_shift
+        
+        return t_tap
     
     @property
     def tap_side(self) -> int:
@@ -348,7 +359,7 @@ class TransformerBranch(BranchElement):
         t = self.tap_ratio  # Complex tap ratio
         t_conj = t.conjugate()
         t_mag_sq = abs(t) ** 2
-        
+
         if self.tap_side == 0:  # Tap on HV (from) side
             Yii = y / t_mag_sq
             Yjj = y
@@ -359,9 +370,8 @@ class TransformerBranch(BranchElement):
             Yjj = y / t_mag_sq
             Yij = -y / t_conj
             Yji = -y / t
-        
+            
         return (Yii, Yjj, Yij, Yji)
-
 
 @dataclass
 class CommonImpedanceBranch(BranchElement):
@@ -424,7 +434,6 @@ class CommonImpedanceBranch(BranchElement):
         y = self.get_admittance_pu(base_mva) if base_mva else self.admittance
         return (y, y, -y, -y)
 
-
 @dataclass
 class SeriesReactorBranch(BranchElement):
     """
@@ -485,7 +494,6 @@ class SeriesReactorBranch(BranchElement):
         """
         y = self.get_admittance_pu(base_mva) if base_mva else self.admittance
         return (y, y, -y, -y)
-
 
 @dataclass
 class Transformer3WBranch:
@@ -548,26 +556,73 @@ class Transformer3WBranch:
     tap_changer_lv: TapChanger | None = None
     tap_pos_lv: int = 0
     
+    # Vector group phase shifts for each winding (nt3ag_h/m/l * 30 degrees)
+    vector_group_shift_deg_hv: int = 0
+    vector_group_shift_deg_mv: int = 0
+    vector_group_shift_deg_lv: int = 0
+    
     @property
     def tap_ratio_hv(self) -> complex:
-        """Get the complex tap ratio for HV side."""
+        """
+        Get the complex tap ratio for HV side combining tap changer and vector group phase shift.
+        
+        Total tap ratio: t_total = t_tap * e^(j*φ_vg)
+        """
+        # Get tap changer ratio (or 1.0 if no tap changer)
         if self.tap_changer_hv is not None:
-            return self.tap_changer_hv.get_complex_tap_ratio(self.tap_pos_hv)
-        return complex(1.0, 0.0)
+            t_tap = self.tap_changer_hv.get_complex_tap_ratio(self.tap_pos_hv)
+        else:
+            t_tap = complex(1.0, 0.0)
+        
+        # Apply vector group phase shift
+        if self.vector_group_shift_deg_hv != 0:
+            phi_vg_rad = math.radians(self.vector_group_shift_deg_hv)
+            vg_shift = complex(math.cos(phi_vg_rad), math.sin(phi_vg_rad))
+            return t_tap * vg_shift
+        
+        return t_tap
     
     @property
     def tap_ratio_mv(self) -> complex:
-        """Get the complex tap ratio for MV side."""
+        """
+        Get the complex tap ratio for MV side combining tap changer and vector group phase shift.
+        
+        Total tap ratio: t_total = t_tap * e^(j*φ_vg)
+        """
+        # Get tap changer ratio (or 1.0 if no tap changer)
         if self.tap_changer_mv is not None:
-            return self.tap_changer_mv.get_complex_tap_ratio(self.tap_pos_mv)
-        return complex(1.0, 0.0)
+            t_tap = self.tap_changer_mv.get_complex_tap_ratio(self.tap_pos_mv)
+        else:
+            t_tap = complex(1.0, 0.0)
+        
+        # Apply vector group phase shift
+        if self.vector_group_shift_deg_mv != 0:
+            phi_vg_rad = math.radians(self.vector_group_shift_deg_mv)
+            vg_shift = complex(math.cos(phi_vg_rad), math.sin(phi_vg_rad))
+            return t_tap * vg_shift
+        
+        return t_tap
     
     @property
     def tap_ratio_lv(self) -> complex:
-        """Get the complex tap ratio for LV side."""
+        """
+        Get the complex tap ratio for LV side combining tap changer and vector group phase shift.
+        
+        Total tap ratio: t_total = t_tap * e^(j*φ_vg)
+        """
+        # Get tap changer ratio (or 1.0 if no tap changer)
         if self.tap_changer_lv is not None:
-            return self.tap_changer_lv.get_complex_tap_ratio(self.tap_pos_lv)
-        return complex(1.0, 0.0)
+            t_tap = self.tap_changer_lv.get_complex_tap_ratio(self.tap_pos_lv)
+        else:
+            t_tap = complex(1.0, 0.0)
+        
+        # Apply vector group phase shift
+        if self.vector_group_shift_deg_lv != 0:
+            phi_vg_rad = math.radians(self.vector_group_shift_deg_lv)
+            vg_shift = complex(math.cos(phi_vg_rad), math.sin(phi_vg_rad))
+            return t_tap * vg_shift
+        
+        return t_tap
     
     def _calculate_pair_impedance_pu(self, uk_percent: float, ukr_percent: float, 
                                       s_ref_mva: float) -> complex:
@@ -771,45 +826,10 @@ class Transformer3WBranch:
         
         return matrix, bus_names
     
-    def get_y_matrix_contributions(self, base_mva: float = 100.0) -> dict:
-        """
-        Get Y-matrix contributions for the 3-winding transformer.
-        
-        Returns a dictionary with entries for each bus pair.
-        Format: {(bus_i, bus_j): (Yii_contrib, Yjj_contrib, Yij, Yji)}
-        
-        Note: base_mva parameter is kept for API compatibility but the
-        impedances are already on system base from GetZpu().
-        """
-        matrix, bus_names = self.get_local_admittance_matrix()
-        
-        # Extract contributions from the 3x3 matrix
-        # Each pair contributes to both diagonals and off-diagonals
-        contributions = {}
-        
-        # For a proper 3-port, we return the full matrix entries
-        # This is different from simple 2-port branches
-        for i in range(3):
-            for j in range(3):
-                if i != j:
-                    bus_i = bus_names[i]
-                    bus_j = bus_names[j]
-                    if (bus_i, bus_j) not in contributions:
-                        # Store: (Yii contribution, Yjj contribution, Yij, Yji)
-                        contributions[(bus_i, bus_j)] = (
-                            matrix[i][i],  # Not used directly, but for reference
-                            matrix[j][j],  # Not used directly, but for reference
-                            matrix[i][j],
-                            matrix[j][i]
-                        )
-        
-        return contributions
-    
     @property
     def bus_names(self) -> list[str]:
         """List of connected bus names [HV, MV, LV]."""
         return [self.hv_bus_name, self.mv_bus_name, self.lv_bus_name]
-
 
 @dataclass
 class ShuntElement(ABC):
@@ -818,6 +838,7 @@ class ShuntElement(ABC):
     bus_name: str
     voltage_kv: float
     admittance: complex = field(init=False)
+    zone : str = "Unknown"  # Optional zone or area identifier
     
     def get_admittance_pu(self, base_mva: float = 100.0) -> complex:
         """
@@ -828,7 +849,6 @@ class ShuntElement(ABC):
             z_base = (self.voltage_kv ** 2) / base_mva
             return self.admittance * z_base
         return self.admittance
-
 
 @dataclass
 class LoadShunt(ShuntElement):
@@ -895,7 +915,6 @@ class LoadShunt(ShuntElement):
         self.lf_voltage_kv = voltage_kv
         self.update_admittance_with_lf_voltage()
 
-
 @dataclass
 class GeneratorShunt(ShuntElement):
     """Synchronous generator - transient/sub-transient reactance model."""
@@ -941,7 +960,6 @@ class ExternalGridShunt(ShuntElement):
             # Use small non-zero value to avoid numerical instabilities in matrix reduction
             self.admittance = complex(1e-12, -1e-12)
 
-
 @dataclass
 class VoltageSourceShunt(ShuntElement):
     """
@@ -968,7 +986,6 @@ class ShuntFilterType(Enum):
     C = 2           # Capacitor only
     R_L_C_Rp = 3    # Series R-L-C with parallel R (damped filter)
     R_L_C1_C2_Rp = 4  # High-pass filter: Series R-L-C1 with parallel C2 and Rp
-
 
 @dataclass
 class ShuntFilterShunt(ShuntElement):
