@@ -8,7 +8,7 @@ A Python library for extracting admittance matrices from DIgSILENT PowerFactory 
 
 The library currently supports extraction of multiple PowerFactory network elements, however some components require further refinement—particularly the proper handling of voltage tap settings for 2-winding and 3-winding transformers.
 
-If you encounter any issues or would like to request new functionality, please [open an issue](https://github.com/valenciaga1231/PF_Admittance_Matrix/issues) on GitHub or contact the developer directly.
+If you encounter any issues or would like to request new functionality, please [open an issue](https://github.com/ULFE-LPEE/PowerFactory-Admittance-Matrix/issues) on GitHub or contact the developer directly.
 
 ## Features
 
@@ -21,13 +21,13 @@ If you encounter any issues or would like to request new functionality, please [
 ### From GitHub
 
 ```bash
-pip install git+https://github.com/valenciaga1231/PF_Admittance_Matrix.git
+pip install git+https://github.com/ULFE-LPEE/PowerFactory-Admittance-Matrix.git
 ```
 
 To update to the latest version:
 
 ```bash
-pip install --upgrade git+https://github.com/valenciaga1231/PF_Admittance_Matrix.git
+pip install --upgrade git+https://github.com/ULFE-LPEE/PowerFactory-Admittance-Matrix.git
 ```
 
 ### Local Development
