@@ -35,9 +35,9 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/valenciaga1231/PF_Admittance_Matrix"
-Documentation = "https://github.com/valenciaga1231/PF_Admittance_Matrix#readme"
-Repository = "https://github.com/valenciaga1231/PF_Admittance_Matrix"
+Homepage = "https://github.com/ULFE-LPEE/PowerFactory-Admittance-Matrix"
+Documentation = "https://github.com/ULFE-LPEE/PowerFactory-Admittance-Matrix#readme"
+Repository = "https://github.com/ULFE-LPEE/PowerFactory-Admittance-Matrix"
 
 [tool.setuptools.packages.find]
 where = ["."]
