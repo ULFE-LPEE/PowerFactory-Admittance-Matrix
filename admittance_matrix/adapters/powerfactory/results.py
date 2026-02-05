@@ -11,7 +11,6 @@ This module contains result data structures for:
 from dataclasses import dataclass
 import math
 
-
 @dataclass
 class BusResult:
     """Load flow results for a busbar."""
@@ -26,31 +25,26 @@ class BusResult:
         angle_rad = math.radians(self.angle_deg)
         return self.voltage_pu * complex(math.cos(angle_rad), math.sin(angle_rad))
 
-
 @dataclass
 class GeneratorResult:
     """Generator data with terminal voltage, impedance, and internal voltage."""
     name: str
     bus_name: str
-    voltage: complex          # Terminal voltage as complex phasor (p.u.)
+    terminal_voltage: complex          # Terminal voltage as complex phasor (p.u.)
     impedance_pu: complex    # Impedance on system base (p.u.)
     p_pu: float              # Active power on generator base (p.u.)
     q_pu: float              # Reactive power on generator base (p.u.)
     internal_voltage: complex # Internal voltage E' behind X''d (p.u.)
-    internal_voltage_mag: float  # |E'| magnitude (p.u.)
-    internal_voltage_angle: float  # E' angle (degrees)
     rated_mva: float
     rated_kv: float
-    zone: str = 'Unknown'     # Zone name from cpZone attribute
     source_type: str = 'generator'  # Source type identifier
-
 
 @dataclass
 class VoltageSourceResult:
     """Voltage source data with terminal voltage and internal voltage."""
     name: str
     bus_name: str
-    voltage: complex          # Terminal voltage as complex phasor (p.u.)
+    terminal_voltage: complex          # Terminal voltage as complex phasor (p.u.)
     impedance_pu: complex     # Internal impedance on system base (p.u.)
     p_pu: float              # Active power on system base (p.u.)
     q_pu: float              # Reactive power on system base (p.u.)
@@ -65,7 +59,7 @@ class ExternalGridResult:
     """External grid data with terminal voltage and internal voltage."""
     name: str
     bus_name: str
-    voltage: complex          # Terminal voltage as complex phasor (p.u.)
+    terminal_voltage: complex          # Terminal voltage as complex phasor (p.u.)
     impedance_pu: complex     # Internal impedance on system base (p.u.)
     p_pu: float              # Active power on system base (p.u.)
     q_pu: float              # Reactive power on system base (p.u.)

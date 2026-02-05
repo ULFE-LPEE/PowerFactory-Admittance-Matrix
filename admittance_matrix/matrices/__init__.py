@@ -5,28 +5,16 @@ Admittance matrix building and reduction functions.
 from .builder import (
     MatrixType,
     build_admittance_matrix,
-    get_unique_buses,
-    get_generator_buses,
 )
 
 from .reducer import (
-    kron_reduction,
-    reduce_to_generator_internal_buses,
+    perform_kron_reduction,
+    extend_matrix_to_generator_internal_nodes,
 )
 
 from .analysis import (
     calculate_power_distribution_ratios,
-)
-
-from .diagnostics import (
-    find_connected_components,
-    find_isolated_buses,
-    find_zero_rows_cols,
-    check_matrix_health,
-    find_ungrounded_buses,
-    validate_generator_buses,
-    diagnose_network,
-    print_diagnostics,
+    calculate_power_distribution_ratios_prefault_postfault,
 )
 
 from .topology import (
@@ -34,22 +22,18 @@ from .topology import (
 )
 
 __all__ = [
+    # Builder
     'MatrixType',
     'build_admittance_matrix',
-    'get_unique_buses',
-    'get_generator_buses',
-    'kron_reduction',
-    'reduce_to_generator_internal_buses',
+
+    # Reducer
+    'perform_kron_reduction',
+    'extend_matrix_to_generator_internal_nodes',
+
+    # Analysis (Power distribution ratios)
     'calculate_power_distribution_ratios',
-    # Diagnostics
-    'find_connected_components',
-    'find_isolated_buses',
-    'find_zero_rows_cols',
-    'check_matrix_health',
-    'find_ungrounded_buses',
-    'validate_generator_buses',
-    'diagnose_network',
-    'print_diagnostics',
+    'calculate_power_distribution_ratios_prefault_postfault',
+
     # Topology
     'simplify_topology',
 ]

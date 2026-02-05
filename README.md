@@ -56,8 +56,8 @@ net = Network(app, base_mva=100.0)
 net.build_matrices()
 
 # Access the matrices
-Y_loadflow = net.Y_lf       # Load flow admittance matrix
-Y_stability = net.Y_stab    # Stability admittance matrix (with generator reactances)
+Y_loadflow = net.Y_lf_matrix       # Load flow admittance matrix
+Y_stability = net.Y_stab_matrix    # Stability admittance matrix (with generator reactances)
 
 print(f"Load flow Y-matrix shape: {Y_loadflow.shape}")
 print(f"Stability Y-matrix shape: {Y_stability.shape}")
@@ -83,7 +83,7 @@ admittance_matrix/
 │   ├── builder.py        # build_admittance_matrix()
 │   ├── reducer.py        # Kron reduction functions
 │   ├── analysis.py       # Power distribution ratio calculations
-│   └── diagnostics.py    # Network diagnostics
+│   └── topology.py       # Used for network simplification
 └── utils/
     └── helpers.py        # Utility functions
 ```
@@ -102,3 +102,11 @@ For detailed debug output:
 ```python
 logging.getLogger("admittance_matrix").setLevel(logging.INFO)
 ```
+
+## License
+
+This project is licensed under the MIT License. See [LICENSE](LICENSE).
+
+## Citation
+
+If you use this library in academic work, please cite it using [CITATION.cff](CITATION.cff).

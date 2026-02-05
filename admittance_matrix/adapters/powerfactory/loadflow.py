@@ -7,6 +7,7 @@ retrieve results from PowerFactory.
 
 import cmath
 import logging
+import powerfactory as pf
 
 from .naming import get_bus_full_name
 from .results import BusResult, GeneratorResult, VoltageSourceResult, ExternalGridResult
@@ -31,8 +32,7 @@ def run_load_flow(app) -> bool:
     err = ldf.Execute()
     return err == 0
 
-
-def get_load_flow_results(app) -> dict[str, BusResult]:
+def get_load_flow_results(app: pf.Application) -> dict[str, BusResult]:
     """
     Get load flow results for all busbars in the network.
     
@@ -46,23 +46,23 @@ def get_load_flow_results(app) -> dict[str, BusResult]:
     """
     results: dict[str, BusResult] = {}
     
-    pf_busbars = app.GetCalcRelevantObjects("*.ElmTerm", 0, 0, 0)
+    pf_busbars: list[pf.DataObject] = app.GetCalcRelevantObjects("*.ElmTerm", 0, 0, 0)
     for bus in pf_busbars:
-        if bus.outserv == 1:
+        if bus.GetAttribute("outserv") == 1:
             continue
         
         try:
             v_pu = bus.GetAttribute("m:u")      # Voltage magnitude in p.u.
             angle = bus.GetAttribute("m:phiu")  # Voltage angle in degrees
         except Exception as e:
-            logger.info(f" Failed to get load flow results for bus {bus.loc_name}: {e}")
+            logger.info(f" Failed to get load flow results for bus {bus.GetAttribute('loc_name')}: {e}")
             continue
         
         if v_pu is None or angle is None:
-            logger.info(f" Load flow results not available for bus {bus.loc_name}")
+            logger.info(f" Load flow results not available for bus {bus.GetAttribute('loc_name')}")
             continue
         
-        v_kv = bus.uknom * v_pu             # Voltage in kV
+        v_kv = bus.GetAttribute("uknom") * v_pu             # Voltage in kV
         
         results[get_bus_full_name(bus)] = BusResult(
             name=get_bus_full_name(bus),
@@ -71,6 +71,78 @@ def get_load_flow_results(app) -> dict[str, BusResult]:
             voltage_kv=v_kv
         )
     
+    return results
+
+def get_generator_data_from_pf(
+    app,
+    shunts: list[ShuntElement],
+    lf_results: dict[str, BusResult],
+    base_mva: float = 100.0
+) -> list[GeneratorResult]:
+    """
+    Get generator data including P/Q from PowerFactory load flow results.
+    
+    This function directly reads P and Q from PowerFactory objects.
+    
+    Args:
+        app: PowerFactory application instance
+        shunts: List of shunt elements (to extract generators)
+        lf_results: Load flow results from get_load_flow_results()
+        base_mva: System base power in MVA
+        
+    Returns:
+        List of GeneratorResult objects
+    """
+    results: list[GeneratorResult] = []
+    
+    # Get all generators from PowerFactory
+    pf_gens: list[pf.DataObject] = app.GetCalcRelevantObjects("*.ElmSym", 0, 0, 0)
+    gen_pf_map: dict[str, pf.DataObject] = {gen.GetAttribute("loc_name"): gen for gen in pf_gens}
+
+    for s in shunts:
+        if type(s).__name__ != 'GeneratorShunt':
+            continue
+        # Get load flow result for this generator's bus
+        bus_result = lf_results.get(s.bus_name)
+        if bus_result is None:
+            logger.warning(f" No load flow result for bus {s.bus_name}, skipping generator {s.name}")
+            continue
+
+        # Get PowerFactory object for this generator
+        pf_gen = gen_pf_map.get(s.name)
+        if pf_gen is None:
+            logger.warning(f" PowerFactory object not found for generator {s.name}")
+            continue
+
+        # Read terminal voltage and power from load flow results
+        voltage = bus_result.voltage_complex
+        P_MW = pf_gen.GetAttribute("m:P:bus1")
+        Q_MVAR = pf_gen.GetAttribute("m:Q:bus1")
+
+        # Convert P and Q to per-unit on system base
+        P_PU = P_MW / s.rated_power_mva
+        Q_PU = Q_MVAR / s.rated_power_mva
+        Z_PU_SYS = s.z_pu * base_mva / s.rated_power_mva
+        S_PU = complex(P_PU, Q_PU)
+
+        # ========================= Calculate generators internal voltage =========================
+        internal_voltage = voltage + s.z_pu * (S_PU.conjugate() / voltage.conjugate())
+        # magnitude = abs(internal_voltage)
+        # angle_deg = cmath.phase(internal_voltage) * 180 / cmath.pi
+
+        results.append(GeneratorResult(
+            name=s.name,
+            bus_name=s.bus_name,
+            terminal_voltage=voltage,
+            impedance_pu=Z_PU_SYS,
+            p_pu=P_PU,
+            q_pu=Q_PU,
+            internal_voltage=internal_voltage,
+            rated_mva=s.rated_power_mva,
+            rated_kv=s.rated_voltage_kv,
+        ))
+    
+    logger.debug("Number of generators extracted:", len(results))
     return results
 
 def _calculate_internal_voltage(
@@ -98,98 +170,9 @@ def _calculate_internal_voltage(
     
     s_pu = complex(p_pu, q_pu)
     internal_voltage = terminal_voltage + z_pu * (s_pu.conjugate() / terminal_voltage.conjugate())
-    # internal_voltage = terminal_voltage + z_pu * (s_pu / abs(terminal_voltage))
     magnitude = abs(internal_voltage)
     angle_deg = cmath.phase(internal_voltage) * 180 / cmath.pi
-    
     return internal_voltage, magnitude, angle_deg
-
-def get_generator_data_from_pf(
-    app,
-    shunts: list[GeneratorShunt],
-    lf_results: dict[str, BusResult],
-    base_mva: float = 100.0
-) -> list[GeneratorResult]:
-    """
-    Get generator data including P/Q from PowerFactory load flow results.
-    
-    This function directly reads P and Q from PowerFactory objects.
-    
-    Args:
-        app: PowerFactory application instance
-        shunts: List of shunt elements (to extract generators)
-        lf_results: Load flow results from get_load_flow_results()
-        base_mva: System base power in MVA
-        
-    Returns:
-        List of GeneratorResult objects
-    """
-    results: list[GeneratorResult] = []
-    
-    # Get all generators from PowerFactory
-    pf_gens = app.GetCalcRelevantObjects("*.ElmSym", 0, 0, 0)
-    gen_pf_map = {gen.loc_name: gen for gen in pf_gens}
-
-    logger.debug(len(pf_gens))
-    
-    for s in shunts:
-        if type(s).__name__ != 'GeneratorShunt':
-            continue
-        
-        bus_result = lf_results.get(s.bus_name)
-        if bus_result is None:
-            logger.warning(f" No load flow result for bus {s.bus_name}, skipping generator {s.name}")
-            continue
-        # Get PowerFactory object for this generator
-        pf_gen = gen_pf_map.get(s.name)
-        if pf_gen is None:
-            continue
-
-        # voltage = bus_result.voltage_complex
-        voltage = bus_result.voltage_complex
-        
-        # Get P and Q from load flow results
-        p_mw = pf_gen.GetAttribute("m:P:bus1")
-        q_mvar = pf_gen.GetAttribute("m:Q:bus1")
-        if hasattr(s, 'rated_power_mva') and s.rated_power_mva > 0:
-            p_pu = p_mw / s.rated_power_mva
-            q_pu = q_mvar / s.rated_power_mva
-            # z_pu_sys = complex(0, s.z_pu * base_mva / s.rated_power_mva)
-            z_pu_sys = s.z_pu * base_mva / s.rated_power_mva
-        else:
-            p_pu = 0.0
-            q_pu = 0.0
-            z_pu_sys = complex(0, 0)
-        internal_v, internal_v_mag, internal_v_angle = _calculate_internal_voltage(
-            voltage, p_pu, q_pu, s.z_pu / s.n_parallel
-        )
-        # Get zone from cpZone attribute
-        zone_name = 'Unknown'
-        try:
-            zone_obj = pf_gen.GetAttribute('cpZone')
-            if zone_obj is not None:
-                zone_name = zone_obj.loc_name
-        except Exception:
-            pass
-        
-        results.append(GeneratorResult(
-            name=s.name,
-            bus_name=s.bus_name,
-            voltage=voltage,
-            impedance_pu=z_pu_sys,
-            p_pu=p_pu,
-            q_pu=q_pu,
-            internal_voltage=internal_v,
-            internal_voltage_mag=internal_v_mag,
-            internal_voltage_angle=internal_v_angle,
-            rated_mva=s.rated_power_mva,
-            rated_kv=s.rated_voltage_kv,
-            zone=zone_name
-        ))
-    
-    logger.debug("Number of generators extracted:", len(results))
-    return results
-
 
 def get_voltage_source_data_from_pf(
     app,
@@ -264,7 +247,7 @@ def get_voltage_source_data_from_pf(
         results.append(VoltageSourceResult(
             name=s.name,
             bus_name=s.bus_name,
-            voltage=voltage,
+            terminal_voltage=voltage,
             impedance_pu=z_pu_sys,
             p_pu=p_mw / base_mva,
             q_pu=q_mvar / base_mva,
@@ -355,7 +338,7 @@ def get_external_grid_data_from_pf(
         results.append(ExternalGridResult(
             name=s.name,
             bus_name=s.bus_name,
-            voltage=voltage,
+            terminal_voltage=voltage,
             impedance_pu=z_pu_sys,
             p_pu=p_mw / base_mva,
             q_pu=q_mvar / base_mva,

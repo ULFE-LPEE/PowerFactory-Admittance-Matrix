@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "admittance_matrix"
-version = "0.1.4"
+version = "0.1.5"
 description = "Python library for building admittance matrices from DIgSILENT PowerFactory networks"
 readme = "README.md"
 license = {text = "MIT"}

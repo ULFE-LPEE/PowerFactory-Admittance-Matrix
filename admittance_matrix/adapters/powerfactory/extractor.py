@@ -49,11 +49,22 @@ def get_network_elements(app) -> tuple[list[BranchElement], list[ShuntElement], 
             continue
         
         try:
+            # Get cubicles
             cub0 = line.GetCubicle(0)
             cub1 = line.GetCubicle(1)
             if cub0 is None or cub1 is None:
                 logger.info(f" Line '{line.loc_name}': Missing cubicle(s), skipping")
                 continue
+
+            # Check if cubicles are closed
+            cub0_status = cub0.IsClosed()
+            cub1_status = cub1.IsClosed()
+
+            if cub0_status != 1 or cub1_status != 1:
+                logger.info(f" Line '{line.loc_name}': One or both cubicles are open, skipping")
+                continue
+            
+            # Get terminals
             from_bus = cub0.cterm
             to_bus = cub1.cterm
             if from_bus is None or to_bus is None:
@@ -71,7 +82,7 @@ def get_network_elements(app) -> tuple[list[BranchElement], list[ShuntElement], 
         R = line.R1  # Total resistance (ohms)
         X = line.X1  # Total reactance (ohms)
         B = line.B1  # Total susceptance (µS)
-        
+
         branches.append(LineBranch(
             name=line.loc_name,
             from_bus_name=get_bus_full_name(from_bus),
@@ -93,11 +104,22 @@ def get_network_elements(app) -> tuple[list[BranchElement], list[ShuntElement], 
             continue
         
         try:
+            # Get cubicles
             cub0 = switch.GetCubicle(0)
             cub1 = switch.GetCubicle(1)
             if cub0 is None or cub1 is None:
                 logger.info(f" Switch '{switch.loc_name}': Missing cubicle(s), skipping")
                 continue
+
+            # Check if cubicles are closed
+            cub0_status = cub0.IsClosed()
+            cub1_status = cub1.IsClosed()
+
+            if cub0_status != 1 or cub1_status != 1:
+                logger.info(f" Switch '{switch.loc_name}': One or both cubicles are open, skipping")
+                continue
+            
+            # Get terminals via cubicles
             from_bus = cub0.cterm
             to_bus = cub1.cterm
             if from_bus is None or to_bus is None:
@@ -105,13 +127,14 @@ def get_network_elements(app) -> tuple[list[BranchElement], list[ShuntElement], 
                 continue
             # Check if buses are energized
             if from_bus.IsEnergized() != 1 or to_bus.IsEnergized() != 1:
+                logger.info(f" Switch '{switch.loc_name}': Bus(es) de-energized, skipping")
                 continue
         except Exception as e:
             logger.warning(f" Switch '{switch.loc_name}': Failed to get cubicle/terminal - {type(e).__name__}: {e}")
             continue
         
         is_closed = not (hasattr(switch, 'on_off') and switch.on_off == 0)
-        
+
         branches.append(SwitchBranch(
             name=switch.loc_name,
             from_bus_name=get_bus_full_name(from_bus),
@@ -137,6 +160,14 @@ def get_network_elements(app) -> tuple[list[BranchElement], list[ShuntElement], 
             if cub0 is None or cub1 is None:
                 logger.info(f" Transformer '{trafo.loc_name}': Missing cubicle(s), skipping")
                 continue
+            # Check if cubicles are closed
+            cub0_status = cub0.IsClosed()
+            cub1_status = cub1.IsClosed()
+
+            if cub0_status != 1 or cub1_status != 1:
+                logger.info(f" Transformer '{trafo.loc_name}': One or both cubicles are open, skipping")
+                continue
+
             hv_bus = cub0.cterm
             lv_bus = cub1.cterm
             if hv_bus is None or lv_bus is None:
@@ -216,6 +247,11 @@ def get_network_elements(app) -> tuple[list[BranchElement], list[ShuntElement], 
                 phitr=phitr
             )
 
+        # Get vector group phase shift
+        # Phase shift in degrees = nt2ag * 30°
+        nt2ag = pf_type.nt2ag if hasattr(pf_type, 'nt2ag') else 0
+        vector_group_shift_deg = nt2ag * 30
+
         # Number of parallel transformers
         n_parallel = getattr(trafo, 'ntnum')
         branches.append(TransformerBranch(
@@ -230,6 +266,7 @@ def get_network_elements(app) -> tuple[list[BranchElement], list[ShuntElement], 
             reactance_pu=x_pu,
             tap_changer=tap_changer,
             tap_pos=tap_pos,
+            vector_group_shift_deg=vector_group_shift_deg,
             n_parallel=n_parallel
         ))
 
@@ -250,6 +287,15 @@ def get_network_elements(app) -> tuple[list[BranchElement], list[ShuntElement], 
             if cub0 is None or cub1 is None:
                 logger.info(f" Common Impedance '{zpu.loc_name}': Missing cubicle(s), skipping")
                 continue
+
+            # Check if cubicles are closed
+            cub0_status = cub0.IsClosed()
+            cub1_status = cub1.IsClosed()
+
+            if cub0_status != 1 or cub1_status != 1:
+                logger.info(f" Common Impedance '{zpu.loc_name}': One or both cubicles are open, skipping")
+                continue
+
             from_bus = cub0.cterm
             to_bus = cub1.cterm
             if from_bus is None or to_bus is None:
@@ -307,6 +353,15 @@ def get_network_elements(app) -> tuple[list[BranchElement], list[ShuntElement], 
             if cub0 is None or cub1 is None:
                 logger.info(f" Series Reactor '{sind.loc_name}': Missing cubicle(s), skipping")
                 continue
+
+            # Check if cubicles are closed
+            cub0_status = cub0.IsClosed()
+            cub1_status = cub1.IsClosed()
+
+            if cub0_status != 1 or cub1_status != 1:
+                logger.info(f" Series Reactor '{sind.loc_name}': One or both cubicles are open, skipping")
+                continue
+
             from_bus = cub0.cterm
             to_bus = cub1.cterm
             if from_bus is None or to_bus is None:
@@ -353,12 +408,19 @@ def get_network_elements(app) -> tuple[list[BranchElement], list[ShuntElement], 
         # Check if element is energized
         if gen.IsEnergized() != 1:
             continue
-        
+
         try:
             cub0 = gen.GetCubicle(0)
             if cub0 is None:
                 logger.info(f" Generator '{gen.loc_name}': Missing cubicle, skipping")
                 continue
+
+            # Check if cubicle is closed
+            cub0_status = cub0.IsClosed()
+            if cub0_status != 1:
+                logger.info(f" Generator '{gen.loc_name}': Cubicle is open, skipping")
+                continue
+            
             bus = cub0.cterm
             if bus is None:
                 logger.info(f" Generator '{gen.loc_name}': Missing terminal (cterm is None), skipping")
@@ -403,7 +465,8 @@ def get_network_elements(app) -> tuple[list[BranchElement], list[ShuntElement], 
             rated_power_mva=rated_mva,
             rated_voltage_kv=rated_kv,
             z_pu = z_pu,
-            n_parallel=n_parallel
+            n_parallel=n_parallel,
+            zone=getattr(gen, 'cpZone', "")
         ))
 
     # --- Shunt elements: Loads (ElmLod) ---
@@ -421,6 +484,12 @@ def get_network_elements(app) -> tuple[list[BranchElement], list[ShuntElement], 
             if cub0 is None:
                 logger.info(f" Load '{load.loc_name}': Missing cubicle, skipping")
                 continue
+
+            cub0_status = cub0.IsClosed()
+            if cub0_status != 1:
+                logger.info(f" Load '{load.loc_name}': Cubicle is open, skipping")
+                continue
+
             bus = cub0.cterm
             if bus is None:
                 logger.info(f" Load '{load.loc_name}': Missing terminal (cterm is None), skipping")
@@ -549,6 +618,13 @@ def get_network_elements(app) -> tuple[list[BranchElement], list[ShuntElement], 
             if cub0 is None:
                 logger.info(f" Shunt Filter '{shnt.loc_name}': Missing cubicle, skipping")
                 continue
+            
+                # Check if cubicle is closed
+            cub0_status = cub0.IsClosed()
+            if cub0_status != 1:
+                logger.info(f" Shunt Filter '{shnt.loc_name}': Cubicle is open, skipping")
+                continue
+
             bus = cub0.cterm
             if bus is None:
                 logger.info(f" Shunt Filter '{shnt.loc_name}': Missing terminal (cterm is None), skipping")
@@ -629,23 +705,22 @@ def get_network_elements(app) -> tuple[list[BranchElement], list[ShuntElement], 
         
         # Get terminals via cubicles (HV = 0, MV = 1, LV = 2)
         try:
-            # cub0 = trafo.GetCubicle(0)
-            # cub1 = trafo.GetCubicle(1)
-            # cub2 = trafo.GetCubicle(2)
             cub0 = trafo.GetAttribute("bushv")
             cub1 = trafo.GetAttribute("busmv")
             cub2 = trafo.GetAttribute("buslv")
             if cub0 is None or cub1 is None or cub2 is None:
                 logger.info(f" 3W Transformer '{trafo.loc_name}': Missing cubicle(s), skipping")
                 continue
+
             hv_bus = cub0.cterm
             mv_bus = cub1.cterm
             lv_bus = cub2.cterm
+
             if hv_bus is None or mv_bus is None or lv_bus is None:
                 logger.info(f" 3W Transformer '{trafo.loc_name}': Missing terminal(s) (cterm is None), skipping")
                 continue
-            # Check if buses are energized
-            if hv_bus.IsEnergized() != 1 or mv_bus.IsEnergized() != 1 or lv_bus.IsEnergized() != 1:
+            # # Check if buses are energized
+            if hv_bus.IsEnergized() != 1 and mv_bus.IsEnergized() != 1 and lv_bus.IsEnergized() != 1:
                 logger.info(f" 3W Transformer '{trafo.loc_name}': Bus(es) de-energized, skipping")
                 continue
         except Exception as e:
@@ -715,6 +790,16 @@ def get_network_elements(app) -> tuple[list[BranchElement], list[ShuntElement], 
                 phitr=ph3tr_h
             )
         
+        # Get vector group phase shifts
+        # Phase shift in degrees = nt3ag * 30°
+        nt3ag_h = pf_type.nt3ag_h if pf_type and hasattr(pf_type, 'nt3ag_h') else 0
+        nt3ag_m = pf_type.nt3ag_m if pf_type and hasattr(pf_type, 'nt3ag_m') else 0
+        nt3ag_l = pf_type.nt3ag_l if pf_type and hasattr(pf_type, 'nt3ag_l') else 0
+        
+        vector_group_shift_deg_hv = nt3ag_h * 30
+        vector_group_shift_deg_mv = nt3ag_m * 30
+        vector_group_shift_deg_lv = nt3ag_l * 30
+        
         # Number of parallel transformers
         n_parallel = getattr(trafo, 'ntnum', 1) or 1
         
@@ -738,7 +823,10 @@ def get_network_elements(app) -> tuple[list[BranchElement], list[ShuntElement], 
             ukr_ml_percent=ukr_ml,
             ukr_lh_percent=ukr_lh,
             tap_changer_hv=tap_changer_hv,
-            tap_pos_hv=tap_pos_hv
+            tap_pos_hv=tap_pos_hv,
+            vector_group_shift_deg_hv=vector_group_shift_deg_hv,
+            vector_group_shift_deg_mv=vector_group_shift_deg_mv,
+            vector_group_shift_deg_lv=vector_group_shift_deg_lv
         ))
 
     return branches, shunts, transformers_3w

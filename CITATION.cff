@@ -1,0 +1,10 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below."
+title: "PowerFactory Admittance Matrix Library"
+version: "0.1.5"
+date-released: "2026-02-05"
+repository-code: "https://github.com/valenciaga1231/PF_Admittance_Matrix"
+url: "https://github.com/valenciaga1231/PF_Admittance_Matrix"
+authors:
+  - name: "Martin Valencic"
+    affiliation: "ULFE LPEE - University of Ljubljana, Faculty of Electrical Engineering"

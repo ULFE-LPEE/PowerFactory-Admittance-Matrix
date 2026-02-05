@@ -7,38 +7,13 @@ This module provides functions for building Y-matrices from network elements.
 import numpy as np
 from enum import Enum
 
-from ..core.elements import BranchElement, ShuntElement, GeneratorShunt, LoadShunt, Transformer3WBranch
+from ..core.elements import BranchElement, ShuntElement, Transformer3WBranch
 
 
 class MatrixType(Enum):
     """Type of admittance matrix to build."""
     LOAD_FLOW = "load_flow"           # Network only (no shunt admittances)
-    STABILITY = "stability"            # Network + loads (for Kron reduction)
-    STABILITY_FULL = "stability_full"  # Network + loads + generators on diagonal
-
-def get_unique_buses(
-    branches: list[BranchElement], 
-    shunts: list[ShuntElement],
-    transformers_3w: list[Transformer3WBranch] | None = None
-) -> list[str]:
-    """Extract unique bus names from branches, shunts, and 3-winding transformers."""
-    buses = set()
-    
-    for b in branches:
-        buses.add(b.from_bus_name)
-        buses.add(b.to_bus_name)
-    
-    for s in shunts:
-        buses.add(s.bus_name)
-    
-    # Add 3-winding transformer buses (HV, MV, LV - no virtual star node needed)
-    if transformers_3w:
-        for t3w in transformers_3w:
-            buses.add(t3w.hv_bus_name)
-            buses.add(t3w.mv_bus_name)
-            buses.add(t3w.lv_bus_name)
-    
-    return sorted(list(buses))
+    STABILITY = "stability"            # Network + loads + generators
 
 def build_admittance_matrix(
     branches: list[BranchElement],
@@ -46,7 +21,8 @@ def build_admittance_matrix(
     bus_names: list[str],
     matrix_type: MatrixType = MatrixType.LOAD_FLOW,
     base_mva: float = 100.0,
-    transformers_3w: list[Transformer3WBranch] | None = None
+    transformers_3w: list[Transformer3WBranch] | None = None,
+    exclude_source_name: str | None = None,  # Add this parameter
 ) -> tuple[np.ndarray, dict[str, int]]:
     """
     Build the admittance (Y) matrix from branch and shunt elements.
@@ -58,7 +34,7 @@ def build_admittance_matrix(
         matrix_type: Type of matrix to build
         base_mva: System base power in MVA (default 100 MVA)
         transformers_3w: List of 3-winding transformers (optional)
-        
+        exclude_source_name: Name of source to exclude from admittance matrix (optional)
     Returns:
         Tuple of (Y_matrix, bus_index_map)
     """
@@ -109,21 +85,10 @@ def build_admittance_matrix(
     if matrix_type == MatrixType.STABILITY:
         # Add loads (generators/sources will be added as internal buses separately)
         for shunt in shunts:
-            if type(shunt).__name__ == 'LoadShunt':
-                i = bus_idx[shunt.bus_name]
-                Y[i, i] += shunt.get_admittance_pu(base_mva)
-    
-    elif matrix_type == MatrixType.STABILITY_FULL:
-        # Add all shunts (loads + generators) directly to diagonal
-        for shunt in shunts:
-            shunt_type = type(shunt).__name__
-            if shunt_type != 'ShuntFilterShunt':  # Already added above
-                i = bus_idx[shunt.bus_name]
-                Y[i, i] += shunt.get_admittance_pu(base_mva)
-    return Y, bus_idx
+            if exclude_source_name is not None and shunt.name == exclude_source_name:
+                print("Excluding source admittance for:", exclude_source_name) #! Dev
+                continue  # Exclude specified source admittance
+            i = bus_idx[shunt.bus_name]
+            Y[i, i] += shunt.get_admittance_pu(base_mva)
 
-def get_generator_buses(shunts: list[ShuntElement]) -> list[str]:
-    """Extract bus names where generators are connected."""
-    return sorted(list(set(
-        s.bus_name for s in shunts if type(s).__name__ == 'GeneratorShunt'
-    )))
+    return Y, bus_idx
