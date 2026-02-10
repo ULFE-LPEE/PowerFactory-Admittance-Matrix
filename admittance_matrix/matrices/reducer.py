@@ -49,6 +49,33 @@ def perform_kron_reduction(
     
     return Y_reduced
 
+
+def perform_kron_reduction_on_busbars(
+    Y: np.ndarray,
+    busbar_indices: list[int],
+) -> np.ndarray:
+    """
+    Apply Kron reduction and retain only specified busbar indices.
+
+    Args:
+        Y: Full admittance matrix
+        busbar_indices: List of busbar indices to retain (indices in Y)
+
+    Returns:
+        Reduced Y-matrix at specified busbar indices
+    """
+    if not busbar_indices:
+        raise ValueError("busbar_indices must not be empty")
+
+    n = Y.shape[0]
+    if any(idx < 0 or idx >= n for idx in busbar_indices):
+        raise IndexError("One or more busbar indices are out of range")
+
+    # Ensure deterministic order and avoid duplicates
+    unique_indices = sorted(set(busbar_indices))
+
+    return perform_kron_reduction(Y, unique_indices)
+
 def extend_matrix_to_generator_internal_nodes(
     Y_bus: np.ndarray,                                          # Stability Y-matrix (generator and load admittances included)
     bus_idx: dict[str, int],                                    # Bus name to index mapping

@@ -8,11 +8,12 @@ the functionality of the admittance_matrix library.
 import logging
 
 import numpy as np
+import pandas as pd
 import powerfactory as pf
 from typing import Literal
 
 from ..matrices.builder import build_admittance_matrix, MatrixType
-from ..matrices.reducer import extend_matrix_to_generator_internal_nodes, perform_kron_reduction
+from ..matrices.reducer import extend_matrix_to_generator_internal_nodes, perform_kron_reduction, perform_kron_reduction_on_busbars
 from ..matrices.analysis import calculate_power_distribution_ratios, calculate_power_distribution_ratios_prefault_postfault
 from ..matrices.topology import simplify_topology
 from ..adapters.powerfactory import get_network_elements, get_main_bus_names
@@ -270,6 +271,62 @@ class Network:
 
         # Return reduced matrix
         return self._Y_reduced
+
+    def get_generator_busbar_distances(self, include_gen_Y: bool = False) -> pd.DataFrame:
+        """
+        Get electrical distances between generator busbars.
+
+        Builds a stability Y-matrix, reduces it to generator busbars, and returns a
+        distance matrix indexed by generator names.
+
+        Args:
+            include_gen_Y: If True, include generator shunt
+                admittances in the stability matrix. Voltage sources and
+                external grids are always excluded.
+        """
+        from ..core.elements import VoltageSourceShunt, ExternalGridShunt
+
+        if self.bus_idx is None:
+            raise RuntimeError("bus_idx is not initialized")
+
+        gen_shunts = [s for s in self.shunts if isinstance(s, GeneratorShunt)]
+        if not gen_shunts:
+            raise RuntimeError("No GeneratorShunt elements found in the network")
+
+        # Build stability matrix, optionally including generator admittances
+        if include_gen_Y:
+            non_source_shunts = [
+                s for s in self.shunts
+                if not isinstance(s, (VoltageSourceShunt, ExternalGridShunt))
+            ]
+        else:
+            non_source_shunts = [
+                s for s in self.shunts
+                if not isinstance(s, (GeneratorShunt, VoltageSourceShunt, ExternalGridShunt))
+            ]
+
+        Y_stab_no_sources, bus_idx_local = build_admittance_matrix(
+            self.branches,
+            non_source_shunts,
+            self.bus_names,
+            matrix_type=MatrixType.STABILITY,
+            base_mva=self.base_mva,
+            transformers_3w=self.transformers_3w,
+        )
+
+        gen_names = [g.name for g in gen_shunts]
+        gen_bus_indices = [bus_idx_local[g.bus_name] for g in gen_shunts]
+        unique_bus_indices = sorted(set(gen_bus_indices))
+        Y_reduced = perform_kron_reduction_on_busbars(Y_stab_no_sources, unique_bus_indices)
+
+        # Electrical distance derived directly from the reduced matrix
+        distance_unique = np.abs(Y_reduced)
+
+        pos_map = {bus_idx: i for i, bus_idx in enumerate(unique_bus_indices)}
+        positions = [pos_map[idx] for idx in gen_bus_indices]
+        distance_full = distance_unique[np.ix_(positions, positions)]
+
+        return pd.DataFrame(distance_full, index=gen_names, columns=gen_names)
     
     def _get_all_sources(self, name_to_exclude: str | None = None) -> list[ShuntElement]:
         """Get all source shunt elements (generators, voltage sources, external grids)."""
