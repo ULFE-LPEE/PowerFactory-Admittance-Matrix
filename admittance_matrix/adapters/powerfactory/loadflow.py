@@ -120,15 +120,15 @@ def get_generator_data_from_pf(
         Q_MVAR = pf_gen.GetAttribute("m:Q:bus1")
 
         # Convert P and Q to per-unit on system base
-        P_PU = P_MW / s.rated_power_mva
-        Q_PU = Q_MVAR / s.rated_power_mva
-        Z_PU_SYS = s.z_pu * base_mva / s.rated_power_mva
+        P_PU = P_MW / base_mva
+        Q_PU = Q_MVAR / base_mva
         S_PU = complex(P_PU, Q_PU)
 
+        # Convert generator impedance to system base
+        Z_PU_SYS = s.z_pu * (base_mva / s.rated_power_mva)
+
         # ========================= Calculate generators internal voltage =========================
-        internal_voltage = voltage + s.z_pu * (S_PU.conjugate() / voltage.conjugate())
-        # magnitude = abs(internal_voltage)
-        # angle_deg = cmath.phase(internal_voltage) * 180 / cmath.pi
+        internal_voltage = voltage + Z_PU_SYS * (S_PU.conjugate() / voltage.conjugate())
 
         results.append(GeneratorResult(
             name=s.name,
@@ -258,7 +258,6 @@ def get_voltage_source_data_from_pf(
     
     logger.debug("Number of voltage sources extracted:", len(results))
     return results
-
 
 def get_external_grid_data_from_pf(
     app,
