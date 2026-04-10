@@ -1,8 +1,8 @@
 cff-version: 1.2.0
 message: "If you use this software, please cite it as below."
 title: "PowerFactory Admittance Matrix Library"
-version: "0.1.5"
-date-released: "2026-02-05"
+version: "0.1.6"
+date-released: "2026-04-10"
 repository-code: "https://github.com/ULFE-LPEE/PowerFactory-Admittance-Matrix"
 url: "https://github.com/ULFE-LPEE/PowerFactory-Admittance-Matrix"
 authors:
