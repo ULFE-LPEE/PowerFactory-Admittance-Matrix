@@ -78,7 +78,8 @@ admittance_matrix/
 │       └── results.py    # Result dataclasses
 ├── core/
 │   ├── elements.py       # BranchElement, ShuntElement classes
-│   └── network.py        # High-level Network wrapper
+│   ├── network.py        # High-level Network wrapper
+│   └── reductionEngine.py # Network reduction engine
 ├── matrices/
 │   ├── builder.py        # build_admittance_matrix()
 │   ├── reducer.py        # Kron reduction functions
