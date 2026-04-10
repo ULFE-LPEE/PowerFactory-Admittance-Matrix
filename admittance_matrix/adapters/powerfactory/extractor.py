@@ -21,7 +21,6 @@ from ...core.elements import (
 
 logger = logging.getLogger(__name__)
 
-
 def get_network_elements(app) -> tuple[list[BranchElement], list[ShuntElement], list[Transformer3WBranch]]:
     """
     Extract branch and shunt elements from the active PowerFactory network.
@@ -456,17 +455,21 @@ def get_network_elements(app) -> tuple[list[BranchElement], list[ShuntElement], 
             rstr = pf_type.rstr if pf_type and hasattr(pf_type, 'rstr') else 0.0
             xstr = pf_type.xstr if pf_type and hasattr(pf_type, 'xstr') else 0.0
             z_pu = complex(rstr, xstr)
-            logger.info(f" Generator '{gen.loc_name}': Unknown model '{model}', defaulting to classical model")
+            logger.info(f" Generator '{gen.GetAttribute('loc_name')}': Unknown model '{model}', defaulting to classical model")
+
+        # Get generator Zone name
+        zone = gen.GetAttribute('cpZone')
+        zone_name = zone.GetAttribute('loc_name') if zone is not None else "None"
         
         shunts.append(GeneratorShunt(
-            name=gen.loc_name,
+            name=gen.GetAttribute('loc_name'),
             bus_name=get_bus_full_name(bus),
             voltage_kv=bus.uknom,
             rated_power_mva=rated_mva,
             rated_voltage_kv=rated_kv,
             z_pu = z_pu,
             n_parallel=n_parallel,
-            zone=getattr(gen, 'cpZone', "")
+            zone=zone_name
         ))
 
     # --- Shunt elements: Loads (ElmLod) ---
@@ -481,29 +484,30 @@ def get_network_elements(app) -> tuple[list[BranchElement], list[ShuntElement], 
         
         try:
             cub0 = load.GetCubicle(0)
+            load_name = load.GetAttribute('loc_name')
             if cub0 is None:
-                logger.info(f" Load '{load.loc_name}': Missing cubicle, skipping")
+                logger.info(f" Load '{load_name}': Missing cubicle, skipping")
                 continue
 
             cub0_status = cub0.IsClosed()
             if cub0_status != 1:
-                logger.info(f" Load '{load.loc_name}': Cubicle is open, skipping")
+                logger.info(f" Load '{load_name}': Cubicle is open, skipping")
                 continue
 
             bus = cub0.cterm
             if bus is None:
-                logger.info(f" Load '{load.loc_name}': Missing terminal (cterm is None), skipping")
+                logger.info(f" Load '{load_name}': Missing terminal (cterm is None), skipping")
                 continue
             # Check if bus is energized
             if bus.IsEnergized() != 1:
-                logger.info(f" Load '{load.loc_name}': Bus de-energized, skipping")
+                logger.info(f" Load '{load_name}': Bus de-energized, skipping")
                 continue
         except Exception as e:
-            logger.warning(f" Load '{load.loc_name}': Failed to get cubicle/terminal - {type(e).__name__}: {e}")
+            logger.warning(f" Load '{load.GetAttribute('loc_name')}': Failed to get cubicle/terminal - {type(e).__name__}: {e}")
             continue
 
         # Get load dynamic simulation model (# TODO: Add more load models)
-        ldtype = load.typ_id if hasattr(load, 'typ_id') else None
+        ldtype = load.GetAttribute('typ_id') if hasattr(load, 'typ_id') else None
         if ldtype is not None:
             # Check for constant impedance load model
             lodst = ldtype.lodst if hasattr(ldtype, 'lodst') else 0
@@ -515,7 +519,7 @@ def get_network_elements(app) -> tuple[list[BranchElement], list[ShuntElement], 
             load_model = LoadModelType.CONSTANT_IMPEDANCE  # Default to constant impedance
         
         shunts.append(LoadShunt(
-            name=load.loc_name,
+            name=load_name,
             bus_name=get_bus_full_name(bus),
             voltage_kv=bus.uknom,
             p_mw=load.plini*load.scale0,
@@ -830,7 +834,6 @@ def get_network_elements(app) -> tuple[list[BranchElement], list[ShuntElement], 
         ))
 
     return branches, shunts, transformers_3w
-
 
 def get_main_bus_names(app) -> set[str]:
     """

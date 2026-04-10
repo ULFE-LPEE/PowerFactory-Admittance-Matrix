@@ -3,8 +3,10 @@ Admittance matrix building and reduction functions.
 """
 
 from .builder import (
+    MatrixBuildResult,
     MatrixType,
     build_admittance_matrix,
+    build_admittance_matrices,
 )
 
 from .reducer import (
@@ -23,8 +25,10 @@ from .topology import (
 
 __all__ = [
     # Builder
+    'MatrixBuildResult',
     'MatrixType',
     'build_admittance_matrix',
+    'build_admittance_matrices',
 
     # Reducer
     'perform_kron_reduction',

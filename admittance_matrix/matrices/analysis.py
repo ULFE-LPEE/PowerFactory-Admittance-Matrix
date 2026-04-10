@@ -6,14 +6,16 @@ including power distribution ratio calculations.
 """
 
 import numpy as np
+import numpy.typing as npt
+from typing import Any
 from ..adapters.powerfactory import GeneratorResult, VoltageSourceResult, ExternalGridResult
 
 def calculate_power_distribution_ratios(
-    Y_reduced: np.ndarray,
+    Y_reduced: npt.NDArray[np.complex128],
     source_data: list[GeneratorResult | VoltageSourceResult | ExternalGridResult],
     disturbance_source_name: str,
-    dist_angle_mode: str = "terminal_current",   # "internal_E" | "terminal_current" | "terminal_voltage"
-) -> tuple[np.ndarray, list[str], list[str]]:
+    dist_angle_mode: str = "terminal_current",   # "internal_E" | "terminal_current"
+) -> tuple[npt.NDArray[np.float64], list[str], list[str]]:
     """
     Calculate power distribution ratios based on synchronizing power coefficients.
 
@@ -31,8 +33,6 @@ def calculate_power_distribution_ratios(
         dist_angle_mode:
             - "internal_E": use internal EMF angle from source_data[dist].internal_voltage_angle
             - "terminal_current": δ_d := angle(I) = angle(V) - angle(S) with S=P+jQ
-            - "terminal_voltage": δ_d := angle(V)
-
     Returns:
         (ratios, source_names_in_order, source_types_in_order)
         - ratios is shape (n,)
@@ -61,8 +61,6 @@ def calculate_power_distribution_ratios(
     # --- Choose disturbance angle δ_d ---
     if dist_angle_mode == "internal_E":
         deltad = float(E_angle[dist_idx])
-        print(
-            f"dist_angle_mode=internal_E: δd = internal voltage angle = {np.degrees(deltad):.2f} deg")  #! Dev
 
     elif dist_angle_mode == "terminal_current":
         # δ_d := angle(I) = angle(V) - angle(S), with S = P + jQ # The same as terminal current angle prefault
@@ -75,23 +73,10 @@ def calculate_power_distribution_ratios(
         deltad = terminal_voltage_angle - pf_angle
         E_angle[dist_idx] = deltad
 
-        print(
-            f"dist_angle_mode=terminal_current: "
-            f"δd = angle(V) - angle(S) = {np.degrees(terminal_voltage_angle):.2f} "
-            f"- {np.degrees(pf_angle):.2f} = {np.degrees(deltad):.2f} deg"
-        )  #! Dev
-
-    elif dist_angle_mode == "terminal_voltage":
-        # δ_d := angle(V)
-        deltad = float(np.angle(source_data[dist_idx].terminal_voltage))
-        print(
-            f"dist_angle_mode=terminal_voltage: δd = angle(V) = {np.degrees(deltad):.2f} deg"
-        )  #! Dev
-
     else:
         raise ValueError(
             f"Unknown dist_angle_mode='{dist_angle_mode}'. "
-            "Use 'internal_E', 'terminal_current', or 'terminal_voltage'."
+            "Use 'internal_E' or 'terminal_current'."
         )
 
     # Scalars for disturbance source
@@ -117,7 +102,7 @@ def calculate_power_distribution_ratios(
 
     # Calculate power distribution ratios
     total_K = float(np.sum(K_col))
-    print(f"Total K (excluding disturbance source) = {total_K}")  #! Dev
+    # print(f"Total K (excluding disturbance source) = {total_K}")  #! Dev
 
     if total_K != 0.0:
         ratios = K_col / total_K
@@ -127,33 +112,33 @@ def calculate_power_distribution_ratios(
     return ratios, source_names, source_types
 
 def calculate_power_distribution_ratios_prefault_postfault(
-        Yred0_3x3: np.ndarray,   
-        Yred1_2x2: np.ndarray,
+        Y_red_before: np.ndarray,   
+        Y_red_after: np.ndarray,
         E_abs: np.ndarray,
         E_angle: np.ndarray,
         dist_idx: int,
         keep_idx: list[int],
         sbase_mva: float = 100.0,
-    ):
+    ) -> tuple[npt.NDArray[np.float64], dict[str, Any]]:
         """
         Compute t=0+ electrical redistribution shares among remaining generators,
         using:
-        - prefault Yred0_3x3 for baseline P0
-        - post-trip Yred1_2x2 for P1 of remaining machines
+        - prefault  Y_red_before for baseline P0
+        - post-trip Y_red_after for P1 of remaining machines
 
-        No Kron reduction is done here. You provide Yred1_2x2.
+        No Kron reduction is done here. You provide Y_red_after.
         """
         # Internal EMFs as phasors (prefault)
-        E0 = E_abs * np.exp(1j * E_angle)  # (3,)
+        E0 = E_abs * np.exp(1j * E_angle)
 
-        # --- Prefault internal currents and powers (all 3 machines)
-        I0 = Yred0_3x3 @ E0
+        # --- Prefault internal currents and powers (all machines)
+        I0 = Y_red_before @ E0
         S0 = E0 * np.conj(I0)
         P0 = np.real(S0)
 
         # --- Post-trip: remaining internal EMFs (assumed unchanged at t=0+)
         E1 = E0[keep_idx]
-        I1 = Yred1_2x2 @ E1
+        I1 = Y_red_after @ E1
         S1 = E1 * np.conj(I1)
         P1 = np.real(S1)
 
@@ -167,7 +152,7 @@ def calculate_power_distribution_ratios_prefault_postfault(
         else:
             ratios_keep = np.zeros_like(dP_keep)
 
-        # Expand to length 3 with 0 for tripped machine
+        # Expand to length of E_abs with 0 for tripped machine
         ratios = np.zeros(len(E_abs), dtype=float)
         for k, idx in enumerate(keep_idx):
             ratios[idx] = float(ratios_keep[k])

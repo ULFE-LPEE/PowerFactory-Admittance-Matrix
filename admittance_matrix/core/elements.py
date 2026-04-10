@@ -838,7 +838,7 @@ class ShuntElement(ABC):
     bus_name: str
     voltage_kv: float
     admittance: complex = field(init=False)
-    zone : str = "Unknown"  # Optional zone or area identifier
+    zone : str = "None"  # Optional zone or area identifier
     
     def get_admittance_pu(self, base_mva: float = 100.0) -> complex:
         """
@@ -864,7 +864,7 @@ class LoadShunt(ShuntElement):
     """
     p_mw: float = 0.0
     q_mvar: float = 0.0
-    lf_voltage_kv: float = field(default=1.0, repr=False)  # Load flow voltage (set after LF)
+    lf_voltage_pu: float = field(default=1.0, repr=False)  # Load flow voltage (set after LF)
     load_model: LoadModelType = LoadModelType.CONSTANT_IMPEDANCE
     
     def __post_init__(self):
@@ -891,7 +891,7 @@ class LoadShunt(ShuntElement):
         
         For CONSTANT_IMPEDANCE model:
             Call this after running load flow to get accurate constant impedance
-            model for stability analysis. Uses lf_voltage_kv if set, otherwise
+            model for stability analysis. Uses lf_voltage_pu if set, otherwise
             falls back to nominal voltage_kv.
         
         For CONSTANT_POWER model:
@@ -903,16 +903,16 @@ class LoadShunt(ShuntElement):
             return
         
         # Constant impedance: recalculate based on LF voltage
-        v_kv = self.lf_voltage_kv if self.lf_voltage_kv > 0 else self.voltage_kv
+        v_kv = self.lf_voltage_pu if self.lf_voltage_pu > 0 else self.voltage_kv
 
         if v_kv > 0:
             self.admittance = complex(self.p_mw, -self.q_mvar) / (v_kv ** 2)
         else:
             self.admittance = complex(1e-12, 1e-12)
     
-    def set_lf_voltage(self, voltage_kv: float) -> None:
+    def set_lf_voltage(self, voltage_pu: float) -> None:
         """Set the load flow voltage and recalculate admittance (if constant impedance model)."""
-        self.lf_voltage_kv = voltage_kv
+        self.lf_voltage_pu = voltage_pu
         self.update_admittance_with_lf_voltage()
 
 @dataclass
@@ -920,7 +920,7 @@ class GeneratorShunt(ShuntElement):
     """Synchronous generator - transient/sub-transient reactance model."""
     rated_power_mva: float = 0.0
     rated_voltage_kv: float = 0.0
-    z_pu: float = 0.0  # Sub-transient reactance on generator base
+    z_pu: complex = complex(0.0, 0.0)  # Sub-transient reactance on generator base
     n_parallel: int = 1 # Number of parallel generators
     
     def __post_init__(self):

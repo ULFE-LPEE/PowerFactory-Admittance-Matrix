@@ -128,7 +128,7 @@ def get_simulation_data(GEN_OUT: str, path: str, available_measurements: Optiona
             gen_name = col
         generator_name_order.append(gen_name)
     
-    print(f"Generator name order: {generator_name_order}") #! Dev
+    # print(f"Generator name order: {generator_name_order}") #! Dev
     
     # Filter to only available measurements if specified
     if available_measurements is not None:
