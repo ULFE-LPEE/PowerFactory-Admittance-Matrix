@@ -48,7 +48,7 @@ For detailed debug output:
 
 import logging
 
-__version__ = "0.1.5"
+__version__ = "0.1.6"
 
 # Configure library logging (NullHandler prevents "No handler found" warnings)
 logging.getLogger(__name__).addHandler(logging.NullHandler())

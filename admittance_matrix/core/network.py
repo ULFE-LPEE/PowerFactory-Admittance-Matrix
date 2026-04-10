@@ -6,13 +6,13 @@ the functionality of the admittance_matrix library.
 """
 
 import logging
-
 import numpy as np
+import numpy.typing as npt
 import pandas as pd
 import powerfactory as pf
 from typing import Literal
 
-from ..matrices.builder import build_admittance_matrix, MatrixType
+from ..matrices.builder import build_admittance_matrix, build_admittance_matrices, MatrixBuildResult, MatrixType
 from ..matrices.reducer import extend_matrix_to_generator_internal_nodes, perform_kron_reduction, perform_kron_reduction_on_busbars
 from ..matrices.analysis import calculate_power_distribution_ratios, calculate_power_distribution_ratios_prefault_postfault
 from ..matrices.topology import simplify_topology
@@ -20,9 +20,12 @@ from ..adapters.powerfactory import get_network_elements, get_main_bus_names
 from ..adapters.powerfactory import run_load_flow, get_load_flow_results, get_generator_data_from_pf, get_voltage_source_data_from_pf, get_external_grid_data_from_pf
 from ..adapters.powerfactory import GeneratorResult, VoltageSourceResult, ExternalGridResult
 from ..adapters.powerfactory.results import BusResult, GeneratorResult, VoltageSourceResult, ExternalGridResult
-from .elements import BranchElement, ShuntElement, Transformer3WBranch, GeneratorShunt
+from .elements import BranchElement, ShuntElement, Transformer3WBranch, GeneratorShunt, VoltageSourceShunt, ExternalGridShunt
+from .reductionEngine import perform_reduction_mode1, perform_reduction_mode2
 
 logger = logging.getLogger(__name__)
+SourceShunt = GeneratorShunt | VoltageSourceShunt | ExternalGridShunt
+
 class Network:
     """
     High-level wrapper for PowerFactory network analysis.
@@ -46,41 +49,58 @@ class Network:
             verbose: If True, print extraction summary to console (default True)
         """
         self.app: pf.Application = app
-        self._hide() # Hide PowerFactory window during operations
 
-        # ========================= Initialize Network data =========================
         # Network data
         self.base_mva = base_mva
         self.simplify_topology = simplify_topology
         self.verbose = verbose
-        self.bus_mapping = None  # Mapping from original to merged bus names
 
-        # All Network elements
-        self.branches: list[BranchElement] = [] # All branch elements
-        self.shunts: list[ShuntElement] = [] # All shunt elements
-        self.transformers_3w: list[Transformer3WBranch] = []  # 3-winding transformers
-        self.bus_names: list[str] = []
+        # Initialize all network data structures to empty/None
+        self._init_state()
+
+        try:
+            self._hide()
+            self._initialize_network_model()
+        finally:
+            self._show()
+
+    def _init_state(self) -> None:
+        # =============== Initialize Network element states ===============
+        self.branches:          list[BranchElement] = []                # All branch elements
+        self.shunts:            list[ShuntElement] = []                 # All shunt elements
+        self.transformers_3w:   list[Transformer3WBranch] = []          # 3-winding transformers
+        self.bus_names:         list[str] = []                          # List of unique bus names
+
+        # =============== Bus mapping for simplified topology (original bus name to merged bus name) ===============
+        self.bus_mapping:   dict[str, str] | None = None
+
+        # =============== Admittance matrices and related data ===============
+        # Y matrices result
+        self.Y_result: MatrixBuildResult | None = None
+
+        # Compatibility
+        self._Y_lf:     npt.NDArray[np.complex128] | None = None      # Admittance matrix for load flow (network only)
+        self._Y_stab:   npt.NDArray[np.complex128] | None = None      # Admittance matrix including loads and generators
+        self._bus_idx:  dict[str, int] | None = None                  # Mapping of bus names to indices in Y matrices
+        self._Y_reduced: npt.NDArray[np.complex128] | None = None   # Reduced to generator internal buses
+
+        # =============== Load-Flow Snapshot ===============
+        # Busbars Load-Flow results
+        self.lf_results:    dict[str, BusResult] | None = None
         
-        # Matrices
-        self._Y_lf: np.ndarray | None = None        # Admittance matrix for load flow (network only)
-        self._Y_stab: np.ndarray | None = None      # Admittance matrix including loads and generators
-        self._Y_reduced: np.ndarray | None = None   # Reduced to generator internal buses
-        self.bus_idx: dict[str, int] | None = None                         # Mapping of bus names to indices in Y matrices
-        self.gen_names = []                         # Names of sources in reduced matrix
-        self.source_types = []                      # Types: 'generator', 'voltage_source', 'external_grid'
-        
-        # Results
-        self.lf_results: dict[str, BusResult] | None = None
-        self.gen_data: list[GeneratorResult] | None = None                  # Generator results from loadflow
-        self.vs_data: list[VoltageSourceResult] | None = None               # Voltage source results from loadflow
-        self.xnet_data: list[ExternalGridResult] | None = None              # External grid results from loadflow
-        self.source_data: list[GeneratorResult | VoltageSourceResult | ExternalGridResult] | None = None         # Combined source data for analysis
-        
-        # ========================= Extract network elements and build admittance matrices =========================
+        # SyncGen, VoltageSource, ExternalGrid data from load flow results
+        self.gen_data:      list[GeneratorResult] | None = None
+        self.vs_data:       list[VoltageSourceResult] | None = None
+        self.xnet_data:     list[ExternalGridResult] | None = None
+
+        # Combined data
+        self.source_data:   list[GeneratorResult | VoltageSourceResult | ExternalGridResult] | None = None
+        self.source_names:  list[str] = []
+        self.source_types:  list[str] = []
+
+    def _initialize_network_model(self) -> None:
         self._extract_network()
         self._build_matrices()
-
-        self._show() # Show PowerFactory window after operations
 
     def _extract_network(self):
         """Extract network elements from PowerFactory."""
@@ -111,21 +131,21 @@ class Network:
         """
         Build admittance matrices from the network elements.
         """
-        # Build load flow matrix (network only)
-        self._Y_lf, self.bus_idx = build_admittance_matrix(
-            self.branches, self.shunts, self.bus_names,
-            matrix_type=MatrixType.LOAD_FLOW,
+        matrices: MatrixBuildResult = build_admittance_matrices(
+            bus_names=self.bus_names,
+            branches=self.branches,
+            shunts=self.shunts,
             base_mva=self.base_mva,
-            transformers_3w=self.transformers_3w
+            transformers_3w=self.transformers_3w,
         )
-        
-        # Build stability matrix (with loads and generators)
-        self._Y_stab, _ = build_admittance_matrix(
-            self.branches, self.shunts, self.bus_names,
-            matrix_type=MatrixType.STABILITY,
-            base_mva=self.base_mva,
-            transformers_3w=self.transformers_3w
-        )
+
+        # Save for compatibility
+        self._Y_lf = matrices.y_lf
+        self._Y_stab = matrices.y_stab
+        self._bus_idx = matrices.bus_idx
+
+        # Build reduced matrix to generator internal nodes
+        self._Y_reduced = self._reduce_network_to_internal_generator_nodes()
     
     def run_load_flow(self) -> bool:
         """
@@ -140,70 +160,56 @@ class Network:
         """
         self._hide()
 
-        success = run_load_flow(self.app)
-        if success:
-            # Get load flow results for all buses
-            self.lf_results = get_load_flow_results(self.app)
+        try:
+            success = run_load_flow(self.app)
+            if success:
+                # ============= Get load flow results for all buses =============
+                self.lf_results = get_load_flow_results(self.app)
 
-            # Obtain LF results for ElmSyn, ElmGenStat, ExtGrid
-            self.gen_data = get_generator_data_from_pf(self.app, self.shunts, self.lf_results, self.base_mva)
-            self.vs_data = get_voltage_source_data_from_pf(self.app, self.shunts, self.lf_results, self.base_mva)
-            self.xnet_data = get_external_grid_data_from_pf(self.app, self.shunts, self.lf_results, self.base_mva)
+                # ============= Get load flow results of sources and build source data =============
+                self.syn_gens    = [s for s in self.shunts if isinstance(s, GeneratorShunt)]
+                self.v_sources   = [s for s in self.shunts if isinstance(s, VoltageSourceShunt)]
+                self.xnets       = [s for s in self.shunts if isinstance(s, ExternalGridShunt)]
 
-            # Update gen_names and source_types to include all source names from load flow data
-            self.gen_names = [g.name for g in self.gen_data]
-            self.source_types = ['generator'] * len(self.gen_data)
+                # Obtain LF results for ElmSyn, ElmGenStat, ExtGrid
+                self.gen_data   =   get_generator_data_from_pf(self.app, self.syn_gens, self.lf_results, self.base_mva)
+                self.vs_data    =   get_voltage_source_data_from_pf(self.app, self.v_sources, self.lf_results, self.base_mva)
+                self.xnet_data  =   get_external_grid_data_from_pf(self.app, self.xnets, self.lf_results, self.base_mva)
 
-            self.gen_names.extend([v.name for v in self.vs_data])
-            self.source_types.extend(['voltage_source'] * len(self.vs_data))
+                # Update source_names and source_types to include all source names from load flow data
+                self.source_names = [g.name for g in self.gen_data]
+                self.source_types = ['generator'] * len(self.gen_data)
 
-            self.gen_names.extend([x.name for x in self.xnet_data])
-            self.source_types.extend(['external_grid'] * len(self.xnet_data))
+                self.source_names.extend([v.name for v in self.vs_data])
+                self.source_types.extend(['voltage_source'] * len(self.vs_data))
 
-            # Update load admittances with actual load flow voltages
-            self._update_load_admittances_with_lf_voltage()
-            
-            # Rebuild matrix with updated load admittances for accurate modeling of constant impedance loads
-            self._build_matrices()
+                self.source_names.extend([x.name for x in self.xnet_data])
+                self.source_types.extend(['external_grid'] * len(self.xnet_data))
 
-            # Build source data once
-            self._build_source_data()
+                # Combined source data
+                self.source_data = self.gen_data + self.vs_data + self.xnet_data
 
-        self._show()
+                # ============= Update load admittances with actual load flow voltages =============
+                self._update_load_admittances_with_lf_voltage()
+                
+                # ============= Rebuild matrices with updated load admittances =============
+                self._build_matrices()
+        finally:
+            self._show()
         return success
     
-    def reduce_to_generators(
-        self,
-        outage_source_name: str | None = None,
-        MODE: Literal[0, 1, 2] = 1,
-    ) -> np.ndarray:
-        """
-        Apply Kron reduction to obtain generator internal bus matrix.
-        
-        Optionally includes voltage sources and external grids as additional 
-        sources that participate in power redistribution.
-        
-        The Y_stab matrix must be built first using build_matrices().
-        
-        Args:
-            include_voltage_sources: If True, include AC voltage sources in reduction
-            include_external_grids: If True, include external grids in reduction
-            outage_source_name: If provided, exclude this source's admittance from network
-        """
+    def _reduce_network_to_internal_generator_nodes(self) -> npt.NDArray[np.complex128]:
         if self._Y_stab is None:
             raise RuntimeError("Must call build_matrices() first")
-        if self.bus_idx is None:
+        if self._bus_idx is None:
             raise RuntimeError("bus_idx is not initialized")
         
-        # ========================= Get full extended matrix for whole network =========================
-        filtered_sources = self.shunts
-        filtered_sources = [s for s in self.shunts if (isinstance(s, GeneratorShunt))]
         filtered_sources = self._get_all_sources()
 
         # Get extended matrix with internal generator nodes (FULL EXTENDED MATRIX)
         self._Y_extended = extend_matrix_to_generator_internal_nodes(
             Y_bus=self._Y_stab,
-            bus_idx=self.bus_idx,
+            bus_idx=self._bus_idx,
             sources=filtered_sources,
             base_mva=self.base_mva,
         )
@@ -211,142 +217,25 @@ class Network:
         n_sources = len(filtered_sources)
         # Reduce to only internal generator buses (indices 0 to n_sources-1)
         indices_to_keep = list(range(n_sources))
-        self._Y_reduced = perform_kron_reduction(self._Y_extended, indices_to_keep)
+        Y_reduced = perform_kron_reduction(self._Y_extended, indices_to_keep)
 
-        # ========================= MODE 1: Get extended matrix for missing outaged generator admittance in M sub-matrix =========================
-        if MODE == 1:
-            Y_stab_mode1, self.bus_idx = build_admittance_matrix(
-                self.branches, self.shunts, self.bus_names,
-                matrix_type=MatrixType.STABILITY,
-                base_mva=self.base_mva,
-                transformers_3w=self.transformers_3w,
-                exclude_source_name=outage_source_name  # Exclude generator admittance
-            )
-            #** This is development feature to test the method
-            filtered_sources = self.shunts
-            filtered_sources = [s for s in self.shunts if (isinstance(s, GeneratorShunt))]
-            filtered_sources = self._get_all_sources()
-
-            # Get extended matrix with internal generator nodes (EXTENDED MATRIX MODIFIED)
-            self._Y_extended_mode1 = extend_matrix_to_generator_internal_nodes(
-                Y_bus=Y_stab_mode1,
-                bus_idx=self.bus_idx,
-                sources=filtered_sources,
-                base_mva=self.base_mva,
-            )
-
-            n_sources = len(filtered_sources)
-            # Reduce to only internal generator buses (indices 0 to n_sources-1)
-            indices_to_keep = list(range(n_sources))
-            self._Y_reduced_mode1 = perform_kron_reduction(self._Y_extended_mode1, indices_to_keep)
-
-        # ========================= MODE 2: Get extended matrix to generator internal nodes completly without outaged generator node =========================
-        if MODE == 2:
-            Y_stab_mode2, self.bus_idx = build_admittance_matrix(
-                self.branches, self.shunts, self.bus_names,
-                matrix_type=MatrixType.STABILITY,
-                base_mva=self.base_mva,
-                transformers_3w=self.transformers_3w,
-                exclude_source_name=outage_source_name  # Exclude generator admittance
-            )
-            filtered_sources = self.shunts
-            filtered_sources = [
-                s for s in self.shunts 
-                if (isinstance(s, GeneratorShunt) and s.name != outage_source_name)
-            ]
-            filtered_sources = self._get_all_sources(name_to_exclude=outage_source_name)
-
-            # Get extended matrix with internal generator nodes (EXTENDED MATRIX WITHOUT OUTAGED GENERATOR)
-            self._Y_extended_mode2 = extend_matrix_to_generator_internal_nodes(
-                Y_bus=Y_stab_mode2,
-                bus_idx=self.bus_idx,
-                sources=filtered_sources,
-                base_mva=self.base_mva,
-            )
-
-            n_sources = len(filtered_sources)
-            # Reduce to only internal generator buses (indices 0 to n_sources-1)
-            indices_to_keep = list(range(n_sources))
-            self._Y_reduced_mode2 = perform_kron_reduction(self._Y_extended_mode2, indices_to_keep)
-
-        # Return reduced matrix
-        return self._Y_reduced
-
-    def get_generator_busbar_distances(self, include_gen_Y: bool = False) -> pd.DataFrame:
-        """
-        Get electrical distances between generator busbars.
-
-        Builds a stability Y-matrix, reduces it to generator busbars, and returns a
-        distance matrix indexed by generator names.
-
-        Args:
-            include_gen_Y: If True, include generator shunt
-                admittances in the stability matrix. Voltage sources and
-                external grids are always excluded.
-        """
-        from ..core.elements import VoltageSourceShunt, ExternalGridShunt
-
-        if self.bus_idx is None:
-            raise RuntimeError("bus_idx is not initialized")
-
-        gen_shunts = [s for s in self.shunts if isinstance(s, GeneratorShunt)]
-        if not gen_shunts:
-            raise RuntimeError("No GeneratorShunt elements found in the network")
-
-        # Build stability matrix, optionally including generator admittances
-        if include_gen_Y:
-            non_source_shunts = [
-                s for s in self.shunts
-                if not isinstance(s, (VoltageSourceShunt, ExternalGridShunt))
-            ]
-        else:
-            non_source_shunts = [
-                s for s in self.shunts
-                if not isinstance(s, (GeneratorShunt, VoltageSourceShunt, ExternalGridShunt))
-            ]
-
-        Y_stab_no_sources, bus_idx_local = build_admittance_matrix(
-            self.branches,
-            non_source_shunts,
-            self.bus_names,
-            matrix_type=MatrixType.STABILITY,
-            base_mva=self.base_mva,
-            transformers_3w=self.transformers_3w,
-        )
-
-        gen_names = [g.name for g in gen_shunts]
-        gen_bus_indices = [bus_idx_local[g.bus_name] for g in gen_shunts]
-        unique_bus_indices = sorted(set(gen_bus_indices))
-        Y_reduced = perform_kron_reduction_on_busbars(Y_stab_no_sources, unique_bus_indices)
-
-        # Electrical distance derived directly from the reduced matrix
-        distance_unique = np.abs(Y_reduced)
-
-        pos_map = {bus_idx: i for i, bus_idx in enumerate(unique_bus_indices)}
-        positions = [pos_map[idx] for idx in gen_bus_indices]
-        distance_full = distance_unique[np.ix_(positions, positions)]
-
-        return pd.DataFrame(distance_full, index=gen_names, columns=gen_names)
+        return Y_reduced
     
-    def _get_all_sources(self, name_to_exclude: str | None = None) -> list[ShuntElement]:
+    def _get_all_sources(self, name_to_exclude: str | None = None) -> list[SourceShunt]:
         """Get all source shunt elements (generators, voltage sources, external grids)."""
-        from ..core.elements import VoltageSourceShunt, ExternalGridShunt
-        
-        sources = []
-        if name_to_exclude is not None:
-            for shunt in self.shunts:
-                if shunt.name == name_to_exclude:
-                    continue
-                if isinstance(shunt, (GeneratorShunt, VoltageSourceShunt, ExternalGridShunt)):
-                    sources.append(shunt)
-        else:
-            for shunt in self.shunts:
-                if isinstance(shunt, (GeneratorShunt, VoltageSourceShunt, ExternalGridShunt)):
-                    sources.append(shunt)
-                    
+        source_types = (GeneratorShunt, VoltageSourceShunt, ExternalGridShunt)
+        sources: list[SourceShunt] = []
+
+        for shunt in self.shunts:
+            if name_to_exclude is not None and shunt.name == name_to_exclude:
+                continue
+
+            if isinstance(shunt, source_types):
+                sources.append(shunt)
+
         return sources
     
-    def calculate_power_ratios(self, disturbance_source_name: str, MODE: Literal[0, 1, 2] = 1) -> tuple[np.ndarray, list[str], list[str]]:
+    def calculate_power_ratios(self, disturbance_source_name: str, MODE: Literal[0, 1, 2] = 1) -> tuple[npt.NDArray[np.float64], list[str], list[str]]:
         """
         Calculate power distribution ratios for a source (generator/voltage source) trip.
         
@@ -356,7 +245,7 @@ class Network:
         Returns:
             Tuple of (ratios array, source names in order, source types in order)
         """
-        self._hide()
+        # self._hide()
         if self._Y_reduced is None:
             raise RuntimeError("Must call reduce_to_generators() first")
         if self.gen_data is None:
@@ -372,8 +261,18 @@ class Network:
 
         # ============== MODE 1: Calculation of power ratios via missing generator admittance in M submatrix ===============
         elif MODE == 1:
+            filtered_sources = self._get_all_sources()
+            Y_mode1 = perform_reduction_mode1(
+                bus_names=self.bus_names,
+                branches=self.branches,
+                branches_3w_traformers=self.transformers_3w,
+                shunts=self.shunts,
+                sources=filtered_sources,
+                BASE_MVA=self.base_mva,
+                excluded_source_name=disturbance_source_name,
+            )
             ratios, source_names_order, source_types_order = calculate_power_distribution_ratios(
-                self._Y_reduced_mode1, self.source_data, disturbance_source_name, dist_angle_mode="terminal_current"
+                Y_mode1, self.source_data, disturbance_source_name, dist_angle_mode="terminal_current"
             )
 
         # ============== MODE 2: Calculation of power ratios using pre-fault and post-fault admittance matrices ===============
@@ -389,22 +288,31 @@ class Network:
             dist_idx = source_names_order.index(disturbance_source_name) if disturbance_source_name in source_names_order else None
             if dist_idx is None:
                 raise ValueError(f"Disturbance source '{disturbance_source_name}' not found in source names")
+
+            Y_mode2 = perform_reduction_mode2(
+                bus_names=self.bus_names,
+                branches=self.branches,
+                branches_3w_traformers=self.transformers_3w,
+                shunts=self.shunts,
+                filtered_sources=self._get_all_sources(name_to_exclude=disturbance_source_name),
+                BASE_MVA=self.base_mva,
+                excluded_source_name=disturbance_source_name,
+            )
             
             # Get all indices except the disturbance source
             n_sources = len(source_names_order)
             keep_idx = [i for i in range(n_sources) if i != dist_idx]
             
             ratios, _ = calculate_power_distribution_ratios_prefault_postfault(
-                        self._Y_reduced, self._Y_reduced_mode2, E_abs, E_angle, 
+                        self._Y_reduced, Y_mode2, E_abs, E_angle, 
                         dist_idx=dist_idx, keep_idx=keep_idx
             )
-
-        self._show()
         return ratios, source_names_order, source_types_order
     
     def calculate_all_power_ratios(
         self,
         outage_generators: list[str] | None = None,
+        MODE: Literal[0, 1, 2] = 1,
         normalize: bool = True,
     ) -> tuple[np.ndarray, list[str], list[str], list[str]]:
         """
@@ -431,32 +339,24 @@ class Network:
             raise RuntimeError("Must call reduce_to_generators() first")
         if self.gen_data is None:
             raise RuntimeError("Must call run_load_flow() first")
-        
-        # Build source data once
-        self._build_source_data()
         if self.source_data is None:
             raise RuntimeError("Source data is not available. Ensure run_load_flow() has been called and source data is built.")
         
         # Default to all synchronous generators if not specified
         if outage_generators is None:
             outage_generators = [
-                name for name, stype in zip(self.gen_names, self.source_types) 
+                name for name, stype in zip(self.source_names, self.source_types) 
                 if stype == 'generator'
             ]
 
-        all_ratios = []
-        valid_outages = []
-        source_names = []
-        source_types = []
+        all_ratios:     list[npt.NDArray[np.float64]] = []
+        valid_outages:  list[str] = []
+        source_names:   list[str] = []
+        source_types:   list[str] = []
         
         for _, gen_name in enumerate(outage_generators):
             try:
-                # TODO: We might need to fix function call below because it takes very long time to compute in a loop...
-                self.reduce_to_generators(outage_source_name=gen_name)
-
-                ratios_i, source_names, source_types = calculate_power_distribution_ratios(
-                    self._Y_reduced, self.source_data, gen_name, dist_angle_mode="terminal_current"
-                )
+                ratios_i, source_names, source_types = self.calculate_power_ratios(gen_name, MODE=MODE)
                 
                 if normalize:
                     ratio_sum = np.sum(ratios_i)
@@ -474,48 +374,6 @@ class Network:
         self._show()
         return ratios_matrix, valid_outages, source_names, source_types
     
-    def _build_source_data(self) -> None:
-        """
-        Build combined source data list matching the order in gen_names.
-        
-        This combines generator, voltage source, and external grid data in the same order
-        as they appear in the reduced Y-matrix.
-        """
-        # Create lookup dictionaries
-        gen_lookup = {g.name: g for g in self.gen_data} if self.gen_data else {}
-        vs_lookup = {v.name: v for v in self.vs_data} if self.vs_data else {}
-        xnet_lookup = {x.name: x for x in self.xnet_data} if self.xnet_data else {}
-        
-        self.source_data = []
-        for name, stype in zip(self.gen_names, self.source_types):
-            if stype == 'generator' and name in gen_lookup:
-                self.source_data.append(gen_lookup[name])
-            elif stype == 'voltage_source' and name in vs_lookup:
-                self.source_data.append(vs_lookup[name])
-            elif stype == 'external_grid' and name in xnet_lookup:
-                self.source_data.append(xnet_lookup[name])
-            else:
-                logger.warning(f"Source '{name}' (type: {stype}) not found in load flow data")
-    
-    def get_generator(self, name: str) -> GeneratorResult:
-        """
-        Get generator data by name.
-        
-        Args:
-            name: Generator name
-            
-        Returns:
-            GeneratorResult object
-        """
-        if self.gen_data is None:
-            raise RuntimeError("Must call run_load_flow() first")
-        
-        for g in self.gen_data:
-            if g.name == name:
-                return g
-        
-        raise KeyError(f"Generator '{name}' not found")
-    
     def get_zone(self, source_name: str) -> str | None:
         """
         Get the zone for a source (generator or voltage source).
@@ -529,10 +387,13 @@ class Network:
         # Find the source in shunts list
         for shunt in self.shunts:
             if shunt.name == source_name:
-                return shunt.zone
+                if shunt.zone is not None:
+                    return shunt.zone
+                else:
+                    return "None"
         
         logger.warning(f"Zone not found for source: {source_name}")
-        return None
+        return "None"
     
     def _update_load_admittances_with_lf_voltage(self) -> None:
         """
@@ -547,14 +408,15 @@ class Network:
         from ..core.elements import LoadShunt
         
         if self.lf_results is None:
-            return
+            raise RuntimeError("lf_results is not available. Ensure run_load_flow() has been called and lf_results is populated.")
         
         for shunt in self.shunts:
             if isinstance(shunt, LoadShunt):
-                # Get the load flow voltage for this bus
                 bus_name = shunt.bus_name
+                # Get the load flow voltage for this bus
                 if bus_name in self.lf_results:
                     lf_voltage_pu = self.lf_results[bus_name].voltage_pu
+                    # Set LF voltage in the shunt element
                     shunt.set_lf_voltage(lf_voltage_pu)
     
     def update_load_admittances_with_post_disturbance_voltage(self, load_voltages: dict[str, float]) -> None:
@@ -569,7 +431,8 @@ class Network:
             load_voltages: Dictionary mapping load names to their voltage (kV) 
                           at the disturbance time from RMS simulation results.
         """
-        from ..core.elements import LoadShunt, GeneratorShunt
+        from ..core.elements import LoadShunt
+        print(load_voltages)
         
         updated_count = 0
         for shunt in self.shunts:
@@ -585,9 +448,61 @@ class Network:
         # Rebuild matrices with updated load admittances
         self._build_matrices()
         
-        # Re-run Kron reduction if it was done before
-        if self._Y_reduced is not None:
-            self.reduce_to_generators()
+    def get_generator_busbar_distances(self, include_gen_Y: bool = False) -> pd.DataFrame:
+        """
+        Get electrical distances between generator busbars.
+
+        Builds a stability Y-matrix, reduces it to generator busbars, and returns a
+        distance matrix indexed by generator names.
+
+        Args:
+            include_gen_Y: If True, include generator shunt
+                admittances in the stability matrix. Voltage sources and
+                external grids are always excluded.
+        """
+        from ..core.elements import VoltageSourceShunt, ExternalGridShunt
+
+        if self._bus_idx is None:
+            raise RuntimeError("bus_idx is not initialized")
+
+        gen_shunts = [s for s in self.shunts if isinstance(s, GeneratorShunt)]
+        if not gen_shunts:
+            raise RuntimeError("No GeneratorShunt elements found in the network")
+
+        # Build stability matrix, optionally including generator admittances
+        if include_gen_Y:
+            non_source_shunts = [
+                s for s in self.shunts
+                if not isinstance(s, (VoltageSourceShunt, ExternalGridShunt))
+            ]
+        else:
+            non_source_shunts = [
+                s for s in self.shunts
+                if not isinstance(s, (GeneratorShunt, VoltageSourceShunt, ExternalGridShunt))
+            ]
+
+        Y_stab_no_sources, bus_idx_local = build_admittance_matrix(
+            bus_names=self.bus_names,
+            branches=self.branches,
+            shunts=non_source_shunts,
+            matrix_type=MatrixType.STABILITY,
+            base_mva=self.base_mva,
+            transformers_3w=self.transformers_3w,
+        )
+
+        gen_names = [g.name for g in gen_shunts]
+        gen_bus_indices = [bus_idx_local[g.bus_name] for g in gen_shunts]
+        unique_bus_indices = sorted(set(gen_bus_indices))
+        Y_reduced = perform_kron_reduction_on_busbars(Y_stab_no_sources, unique_bus_indices)
+
+        # Electrical distance derived directly from the reduced matrix
+        distance_unique = np.abs(Y_reduced)
+
+        pos_map = {bus_idx: i for i, bus_idx in enumerate(unique_bus_indices)}
+        positions = [pos_map[idx] for idx in gen_bus_indices]
+        distance_full = distance_unique[np.ix_(positions, positions)]
+
+        return pd.DataFrame(distance_full, index=gen_names, columns=gen_names)
     
     def _print_network_summary(self, title: str = "Network summary:") -> None:
         """Print a summary of network elements to console."""
@@ -634,6 +549,11 @@ class Network:
         if self.app is not None:
             self.app.Hide()
 
+    def _show(self) -> None:
+        """Show the PowerFactory application window."""
+        if self.app is not None:
+            self.app.Show()
+
     @staticmethod
     def _get_unique_buses(
         branches: list[BranchElement],
@@ -658,23 +578,18 @@ class Network:
                 buses.add(t3w.lv_bus_name)
 
         return sorted(list(buses))
-    
-    def _show(self) -> None:
-        """Show the PowerFactory application window."""
-        if self.app is not None:
-            self.app.Show()
-    
+
     @property
     def gen_zones(self) -> list[str | None]:
         """
-        Get zones for all sources in gen_names order.
+        Get zones for all sources in source_names order.
         
         Returns:
-            List of zone names matching gen_names order (None if zone not found)
+            List of zone names matching source_names order (None if zone not found)
         """
-        if not self.gen_names:
+        if not self.source_names:
             return []
-        return [self.get_zone(name) for name in self.gen_names]
+        return [self.get_zone(name) for name in self.source_names]
     
     @property
     def n_buses(self) -> int:
