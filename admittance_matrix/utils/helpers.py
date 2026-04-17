@@ -269,10 +269,29 @@ def get_simulation_data_with_loads(GEN_OUT: str, path: str, available_measuremen
     return rdP, generator_name_order, load_powers, load_voltages, load_name_order, load_voltages_at_dist, time_values, data
 
 
-def obtain_rms_results(app: pf.Application, filesPath: str, pfResultsName: str = "All calculations") -> None:
+def obtain_rms_results(app: pf.Application, filesPath: str, pfResultsName: str = "All calculations", simConfig: dict | None = None) -> None:
+    """
+    Obtain RMS simulation results for generator outages.
+    
+    Args:
+        app: PowerFactory application instance
+        filesPath: Path to save the result CSV files
+        pfResultsName: Name of the PowerFactory results object
+        simConfig: Dictionary with simulation configuration containing:
+            - 'sim_time': Total simulation time in seconds (default: 0.15)
+            - 'event_time': Time of fault event in seconds (default: 0.1)
+            - 'timestep': Simulation timestep in ms (default: 1)
+    """
+    # Define default simulation configuration
+    if simConfig is None:
+        simConfig = {}
+    
+    sim_time = simConfig.get('sim_time', 0.15)
+    event_time = simConfig.get('event_time', 0.1)
+    timestep = simConfig.get('timestep', 1)
+    
     # Get the ElmRes object
     elmRes = app.GetCalcRelevantObjects(f"*{pfResultsName}.ElmRes")[0]
-    # elmRes = app.GetCalcRelevantObjects("*I.ElmRes")[0]
     print(f"Results object: {elmRes.GetAttribute('loc_name')}")
     
     # Get all generators
@@ -347,47 +366,39 @@ def obtain_rms_results(app: pf.Application, filesPath: str, pfResultsName: str =
     previous_event = None
     files_names = []
 
-    # Only create switch events for generators (not voltage sources)
     for gen in generators:
         iteration += 1
 
         gen_name = gen.GetAttribute("loc_name")
         print(f"Processing generator outage {iteration}: {gen_name}")
 
-        # ====== 1. We define the SwitchEvent (only for generators)
+        # ====== 1. Create SwitchEvent
         new_event = eventFolder.CreateObject("EvtSwitch")
         new_event.SetAttribute("loc_name", gen_name+"_izpad")
         new_event.SetAttribute("p_target", gen)
-        new_event.SetAttribute("time", 0.1)
+        new_event.SetAttribute("time", event_time)
         created_events.append(new_event)
 
-        # ====== 2. We run the simulation
-        # Calculate initial conditions
-        oInit = app.GetFromStudyCase('ComInc')  # Get initial condition calculation object
-        timeUnit = oInit.GetAttributeUnit("dtgrd") # Set to calculate initial conditions
-        if timeUnit == "s": # If not in ms
-            oInit.SetAttribute("dtgrd", 0.001) # Set to 10 ms
-        if timeUnit == "ms": # If not in ms
-            oInit.SetAttribute("dtgrd", 1) # Set sim step to 10 ms
-        # oInit.SetAttribute("dtgrd", 1) # Set sim step to 1 ms
-        oInit.SetAttribute("tstart", 0) # Set sim start time to 0 ms
+        # ====== 2. Run the simulation
+        oInit = app.GetFromStudyCase('ComInc')
+        timeUnit = oInit.GetAttributeUnit("dtgrd")
+        if timeUnit == "s":
+            oInit.SetAttribute("dtgrd", timestep / 1000)
+        if timeUnit == "ms":
+            oInit.SetAttribute("dtgrd", timestep)
+        oInit.SetAttribute("tstart", 0)
         oInit.Execute() # type: ignore
 
-        # Run RMS-simulation
-        oRms = app.GetFromStudyCase('ComSim')   # Get RMS-simulation object
-        oRms.SetAttribute("tstop", 0.15)  # Set simulation time to 0.5 seconds
+        oRms = app.GetFromStudyCase('ComSim')
+        oRms.SetAttribute("tstop", sim_time)
         oRms.Execute() # type: ignore
 
-        # ====== 3. We delete the current event if it exists
+        # ====== 3. Delete previous event
         if previous_event is not None:
-            deleted = previous_event.Delete()
-            if deleted == 0:
-                pass
-            else:
-                print(f"Failed to delete event: {previous_event.GetAttribute('loc_name')}")
+            previous_event.Delete()
         new_event.SetAttribute("outserv", 1)
 
-        # ====== 4. We get the results
+        # ====== 4. Export results
         comRes = app.GetFromStudyCase("ComRes")
         comRes.pResult = elmRes         # Set ElmRes object to export from # type: ignore
         comRes.iopt_exp = 6             # Set export to csv - 6 # type: ignore

@@ -979,6 +979,44 @@ class VoltageSourceShunt(ShuntElement):
         z_complex = complex(r, x)
         self.admittance = 1 / z_complex
 
+@dataclass
+class PVSystemShunt(ShuntElement):
+    """
+    Photovoltaic system element (ElmPvsys).
+
+    For stability-matrix purposes the PV system is modeled only by its
+    short-circuit impedance, represented as a shunt admittance behind the
+    converter/source impedance.
+
+    The impedance is derived on the PV system base from PowerFactory inputs:
+    - uk [%]: short-circuit impedance magnitude
+    - Pcu [kW]: copper losses, used to derive the resistive part when available
+    - sgn [MVA], ugn [kV]: rated power and rated voltage
+    """
+    rated_power_mva: float = 0.0
+    rated_voltage_kv: float = 0.0
+    uk_percent: float = 0.0
+    copper_losses_kw: float = 0.0
+
+    def __post_init__(self):
+        """Calculate admittance from PV short-circuit impedance data."""
+        if self.rated_power_mva <= 0 or self.rated_voltage_kv <= 0 or self.uk_percent <= 0:
+            self.admittance = complex(1e-12, -1e-12)
+            return
+
+        z_pu = self.uk_percent / 100.0
+        r_pu = max(self.copper_losses_kw, 0.0) / (1000.0 * self.rated_power_mva)
+        x_sq = max(z_pu ** 2 - r_pu ** 2, 0.0)
+        x_pu = math.sqrt(x_sq)
+
+        if r_pu == 0.0 and x_pu == 0.0:
+            self.admittance = complex(1e-12, -1e-12)
+            return
+
+        z_base = (self.rated_voltage_kv ** 2) / self.rated_power_mva
+        z_ohm = complex(r_pu, x_pu) * z_base
+        self.admittance = 1 / z_ohm
+
 class ShuntFilterType(Enum):
     """Shunt filter/capacitor layout types matching PowerFactory ElmShnt."""
     R_L_C = 0       # Series R-L-C (tuned filter)

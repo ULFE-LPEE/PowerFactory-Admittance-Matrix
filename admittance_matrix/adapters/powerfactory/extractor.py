@@ -14,7 +14,7 @@ from ...core.elements import (
     BranchElement, ShuntElement,
     LineBranch, SwitchBranch, TransformerBranch, Transformer3WBranch,
     CommonImpedanceBranch, SeriesReactorBranch,
-    LoadShunt, LoadModelType, GeneratorShunt, ExternalGridShunt, VoltageSourceShunt,
+    LoadShunt, LoadModelType, GeneratorShunt, ExternalGridShunt, VoltageSourceShunt, PVSystemShunt,
     ShuntFilterShunt, ShuntFilterType,
     TapChanger, TapChangerType, RatioAsymTapChanger, IdealPhaseTapChanger, SymPhaseTapChanger
 )
@@ -605,6 +605,68 @@ def get_network_elements(app) -> tuple[list[BranchElement], list[ShuntElement], 
             voltage_kv=bus.uknom,
             resistance_ohm=r_ohm,
             reactance_ohm=x_ohm
+        ))
+
+    # --- Shunt elements: PV Systems (ElmPvsys) ---
+    pf_pvsys: List[pf.DataObject] = app.GetCalcRelevantObjects("*.ElmPvsys", 0, 0, 0)
+    for pvsys in pf_pvsys:
+        if pvsys.outserv == 1:
+            continue
+
+        if pvsys.IsEnergized() != 1:
+            continue
+
+        try:
+            cub0 = pvsys.GetCubicle(0)
+            if cub0 is None:
+                logger.info(f" PV System '{pvsys.loc_name}': Missing cubicle, skipping")
+                continue
+
+            cub0_status = cub0.IsClosed()
+            if cub0_status != 1:
+                logger.info(f" PV System '{pvsys.loc_name}': Cubicle is open, skipping")
+                continue
+
+            bus = cub0.cterm
+            if bus is None:
+                logger.info(f" PV System '{pvsys.loc_name}': Missing terminal (cterm is None), skipping")
+                continue
+            if bus.IsEnergized() != 1:
+                logger.info(f" PV System '{pvsys.loc_name}': Bus de-energized, skipping")
+                continue
+        except Exception as e:
+            logger.warning(f" PV System '{pvsys.loc_name}': Failed to get cubicle/terminal - {type(e).__name__}: {e}")
+            continue
+
+        rated_mva = getattr(pvsys, 'sgn', None) or 0.0
+        rated_kv = bus.uknom or 0.0
+
+        try:
+            uk_percent = pvsys.GetAttribute("uk")
+        except Exception:
+            uk_percent = getattr(pvsys, 'uk', None)
+        uk_percent = uk_percent or 0.0
+
+        try:
+            copper_losses_kw = pvsys.GetAttribute("Pcu")
+        except Exception:
+            copper_losses_kw = getattr(pvsys, 'Pcu', None) or getattr(pvsys, 'pcu', None)
+        copper_losses_kw = copper_losses_kw or 0.0
+
+        if rated_mva <= 0 or rated_kv <= 0 or uk_percent <= 0:
+            logger.info(
+                f" PV System '{pvsys.loc_name}': Missing rated power/voltage or short-circuit impedance, skipping"
+            )
+            continue
+
+        shunts.append(PVSystemShunt(
+            name=pvsys.loc_name,
+            bus_name=get_bus_full_name(bus),
+            voltage_kv=bus.uknom,
+            rated_power_mva=rated_mva,
+            rated_voltage_kv=rated_kv,
+            uk_percent=uk_percent,
+            copper_losses_kw=copper_losses_kw,
         ))
 
     # --- Shunt elements: Shunt Filters/Capacitors (ElmShnt) ---

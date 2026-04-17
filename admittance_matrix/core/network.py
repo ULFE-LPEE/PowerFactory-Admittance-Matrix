@@ -516,6 +516,7 @@ class Network:
         n_loads = len([s for s in self.shunts if type(s).__name__ == 'LoadShunt'])
         n_xnets = len([s for s in self.shunts if type(s).__name__ == 'ExternalGridShunt'])
         n_vacs = len([s for s in self.shunts if type(s).__name__ == 'VoltageSourceShunt'])
+        n_pvsys = len([s for s in self.shunts if type(s).__name__ == 'PVSystemShunt'])
         n_shunts = len([s for s in self.shunts if type(s).__name__ == 'ShuntFilterShunt'])
         n_buses = len(self._get_unique_buses(self.branches, self.shunts, self.transformers_3w))
         
@@ -540,6 +541,8 @@ class Network:
             print(f"  External grids:     {n_xnets}")
         if n_vacs > 0:
             print(f"  Voltage sources:    {n_vacs}")
+        if n_pvsys > 0:
+            print(f"  PV systems:         {n_pvsys}")
         if n_shunts > 0:
             print(f"  Shunt filters:      {n_shunts}")
         print(f"  Buses:              {n_buses}")
@@ -656,3 +659,8 @@ class Network:
     def n_voltage_sources(self) -> int:
         """Number of AC voltage sources in the network."""
         return len([s for s in self.shunts if type(s).__name__ == 'VoltageSourceShunt'])
+
+    @property
+    def n_pv_systems(self) -> int:
+        """Number of PV systems in the network."""
+        return len([s for s in self.shunts if type(s).__name__ == 'PVSystemShunt'])

@@ -65,6 +65,7 @@ from .core import (
     ShuntElement,
     LoadShunt,
     GeneratorShunt,
+    PVSystemShunt,
     ExternalGridShunt,
     VoltageSourceShunt,
 )
@@ -112,6 +113,7 @@ __all__ = [
     'ShuntElement',
     'LoadShunt',
     'GeneratorShunt',
+    'PVSystemShunt',
     'ExternalGridShunt',
     'VoltageSourceShunt',
     
