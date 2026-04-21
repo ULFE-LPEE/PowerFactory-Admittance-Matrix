@@ -11,17 +11,27 @@ import powerfactory as pf
 
 from .naming import get_bus_full_name
 from ...core.elements import (
-    BranchElement, ShuntElement,
+    BranchElement, ConverterSimModelType, ShuntElement,
     LineBranch, SwitchBranch, TransformerBranch, Transformer3WBranch,
     CommonImpedanceBranch, SeriesReactorBranch,
-    LoadShunt, LoadModelType, GeneratorShunt, ExternalGridShunt, VoltageSourceShunt, PVSystemShunt,
+    LoadShunt, LoadModelType, GeneratorShunt, ExternalGridShunt, StaticGeneratorShunt, VoltageSourceShunt, PVSystemShunt,
     ShuntFilterShunt, ShuntFilterType,
     TapChanger, TapChangerType, RatioAsymTapChanger, IdealPhaseTapChanger, SymPhaseTapChanger
 )
 
 logger = logging.getLogger(__name__)
 
-def get_network_elements(app) -> tuple[list[BranchElement], list[ShuntElement], list[Transformer3WBranch]]:
+
+def _get_converter_sim_model(raw_value: int) -> ConverterSimModelType:
+    """Normalize PowerFactory sim_model values to the internal enum."""
+    raw_value = getattr(raw_value, 'value', raw_value)
+
+    try:
+        return ConverterSimModelType(int(raw_value))
+    except (TypeError, ValueError):
+        return ConverterSimModelType.ACCORDING_TO_INPUT
+
+def get_network_elements(app: pf.Application) -> tuple[list[BranchElement], list[ShuntElement], list[Transformer3WBranch]]:
     """
     Extract branch and shunt elements from the active PowerFactory network.
     
@@ -640,6 +650,8 @@ def get_network_elements(app) -> tuple[list[BranchElement], list[ShuntElement], 
 
         rated_mva = getattr(pvsys, 'sgn', None) or 0.0
         rated_kv = bus.uknom or 0.0
+        sim_model: int = getattr(pvsys, 'iSimModel', 0)
+        # sim_model = 1 #! Hardcode for Current-Source
 
         try:
             uk_percent = pvsys.GetAttribute("uk")
@@ -655,18 +667,98 @@ def get_network_elements(app) -> tuple[list[BranchElement], list[ShuntElement], 
 
         if rated_mva <= 0 or rated_kv <= 0 or uk_percent <= 0:
             logger.info(
-                f" PV System '{pvsys.loc_name}': Missing rated power/voltage or short-circuit impedance, skipping"
+                f" PV System '{pvsys.GetAttribute('loc_name')}': Missing rated power/voltage or short-circuit impedance, skipping"
             )
             continue
 
         shunts.append(PVSystemShunt(
-            name=pvsys.loc_name,
+            name=pvsys.GetAttribute('loc_name'),
             bus_name=get_bus_full_name(bus),
             voltage_kv=bus.uknom,
             rated_power_mva=rated_mva,
             rated_voltage_kv=rated_kv,
+            sim_model=_get_converter_sim_model(sim_model),
             uk_percent=uk_percent,
             copper_losses_kw=copper_losses_kw,
+        ))
+
+    # --- Shunt elements: Static Generators (ElmGenstat) ---
+    pf_genstats: List[pf.DataObject] = app.GetCalcRelevantObjects("*.ElmGenstat", 0, 0, 0)
+    for genstat in pf_genstats:
+        if genstat.outserv == 1:
+            continue
+
+        if genstat.IsEnergized() != 1:
+            continue
+
+        try:
+            cub0 = genstat.GetCubicle(0)
+            if cub0 is None:
+                logger.info(f" Static Generator '{genstat.loc_name}': Missing cubicle, skipping")
+                continue
+
+            cub0_status = cub0.IsClosed()
+            if cub0_status != 1:
+                logger.info(f" Static Generator '{genstat.loc_name}': Cubicle is open, skipping")
+                continue
+
+            bus = cub0.cterm
+            if bus is None:
+                logger.info(f" Static Generator '{genstat.loc_name}': Missing terminal (cterm is None), skipping")
+                continue
+            if bus.IsEnergized() != 1:
+                logger.info(f" Static Generator '{genstat.loc_name}': Bus de-energized, skipping")
+                continue
+        except Exception as e:
+            logger.warning(f" Static Generator '{genstat.loc_name}': Failed to get cubicle/terminal - {type(e).__name__}: {e}")
+            continue
+
+        rated_mva = getattr(genstat, 'sgn', None) or 0.0
+        rated_kv = bus.uknom or 0.0
+        sim_model = getattr(genstat, 'iSimModel', 0)
+
+        try:
+            uk_percent = genstat.GetAttribute("uk")
+        except Exception:
+            uk_percent = getattr(genstat, 'uk', None)
+        uk_percent = uk_percent or 0.0
+
+        try:
+            copper_losses_kw = genstat.GetAttribute("Pcu")
+        except Exception:
+            copper_losses_kw = getattr(genstat, 'Pcu', None) or getattr(genstat, 'pcu', None)
+        copper_losses_kw = copper_losses_kw or 0.0
+
+        # Obtain Composite Model Data
+        composite_model: pf.DataObject = genstat.GetAttribute("c_pmod")
+        blk_slots = composite_model.GetAttribute("pblk")
+        slot_elements = composite_model.GetAttribute("pelm")
+        virt_imp_idx = None
+        for idx, blk in enumerate(blk_slots):
+            if (blk.loc_name == "Virtual impedance"):
+                virt_imp_idx = idx
+                break
+        virtual_impedance_element = slot_elements[virt_imp_idx]
+        virtual_z_resistance = virtual_impedance_element.GetAttribute("params")[0]
+        virtual_z_reactance = virtual_impedance_element.GetAttribute("params")[1]
+        virtual_impedance_pu = complex(virtual_z_resistance, virtual_z_reactance)
+
+        if rated_mva <= 0 or rated_kv <= 0 or uk_percent <= 0:
+            logger.info(
+                f" Static Generator '{genstat.loc_name}': Missing rated power/voltage or short-circuit impedance, skipping"
+            )
+            continue
+
+        shunts.append(StaticGeneratorShunt(
+            name=genstat.loc_name,
+            bus_name=get_bus_full_name(bus),
+            voltage_kv=bus.uknom,
+            rated_power_mva=rated_mva,
+            rated_voltage_kv=rated_kv,
+            sim_model=_get_converter_sim_model(sim_model),
+            uk_percent=uk_percent,
+            copper_losses_kw=copper_losses_kw,
+            virtual_impedance_pu=virtual_impedance_pu
         ))
 
     # --- Shunt elements: Shunt Filters/Capacitors (ElmShnt) ---

@@ -171,7 +171,7 @@ class Network:
                 self.v_sources   = [s for s in self.shunts if isinstance(s, VoltageSourceShunt)]
                 self.xnets       = [s for s in self.shunts if isinstance(s, ExternalGridShunt)]
 
-                # Obtain LF results for ElmSyn, ElmGenStat, ExtGrid
+                # Obtain LF results for dynamic sources used in the reduction workflow
                 self.gen_data   =   get_generator_data_from_pf(self.app, self.syn_gens, self.lf_results, self.base_mva)
                 self.vs_data    =   get_voltage_source_data_from_pf(self.app, self.v_sources, self.lf_results, self.base_mva)
                 self.xnet_data  =   get_external_grid_data_from_pf(self.app, self.xnets, self.lf_results, self.base_mva)
@@ -517,6 +517,7 @@ class Network:
         n_xnets = len([s for s in self.shunts if type(s).__name__ == 'ExternalGridShunt'])
         n_vacs = len([s for s in self.shunts if type(s).__name__ == 'VoltageSourceShunt'])
         n_pvsys = len([s for s in self.shunts if type(s).__name__ == 'PVSystemShunt'])
+        n_genstats = len([s for s in self.shunts if type(s).__name__ == 'StaticGeneratorShunt'])
         n_shunts = len([s for s in self.shunts if type(s).__name__ == 'ShuntFilterShunt'])
         n_buses = len(self._get_unique_buses(self.branches, self.shunts, self.transformers_3w))
         
@@ -543,6 +544,8 @@ class Network:
             print(f"  Voltage sources:    {n_vacs}")
         if n_pvsys > 0:
             print(f"  PV systems:         {n_pvsys}")
+        if n_genstats > 0:
+            print(f"  Static generators:  {n_genstats}")
         if n_shunts > 0:
             print(f"  Shunt filters:      {n_shunts}")
         print(f"  Buses:              {n_buses}")
@@ -664,3 +667,8 @@ class Network:
     def n_pv_systems(self) -> int:
         """Number of PV systems in the network."""
         return len([s for s in self.shunts if type(s).__name__ == 'PVSystemShunt'])
+
+    @property
+    def n_static_generators(self) -> int:
+        """Number of static generators in the network."""
+        return len([s for s in self.shunts if type(s).__name__ == 'StaticGeneratorShunt'])

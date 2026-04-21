@@ -12,7 +12,7 @@ from collections.abc import Sequence
 import numpy as np
 import numpy.typing as npt
 
-from ..core.elements import BranchElement, ExternalGridShunt, GeneratorShunt, LoadModelType, LoadShunt, PVSystemShunt, ShuntElement, ShuntFilterShunt, Transformer3WBranch, VoltageSourceShunt
+from ..core.elements import BranchElement, ExternalGridShunt, GeneratorShunt, LoadModelType, LoadShunt, PVSystemShunt, ShuntElement, ShuntFilterShunt, StaticGeneratorShunt, Transformer3WBranch, VoltageSourceShunt
 
 logger = logging.getLogger(__name__)
 
@@ -98,7 +98,7 @@ def _add_stability_shunts(
             logger.debug("Excluding source admittance for %s", exclude_source_name)
             continue
 
-        if isinstance(shunt, (GeneratorShunt, VoltageSourceShunt, ExternalGridShunt, PVSystemShunt)):
+        if isinstance(shunt, (GeneratorShunt, VoltageSourceShunt, ExternalGridShunt, PVSystemShunt, StaticGeneratorShunt)):
             i = bus_idx[shunt.bus_name]
             matrix[i, i] += shunt.get_admittance_pu(base_mva)
 

@@ -22,6 +22,19 @@ class LoadModelType(Enum):
     CONSTANT_IMPEDANCE = 0  # Z = const, P,Q vary with V^2
     CONSTANT_POWER = 1      # P,Q = const, Z varies with V^2
 
+
+class ConverterSimModelType(Enum):
+    """Simulation model type enumeration matching PowerFactory sim_model for converter-based sources."""
+    ACCORDING_TO_INPUT = 0  # Simple PV model with constant power injection
+    CURRENT = 1             # Detailed PV model with voltage-dependent behavior
+    VOLTAGE = 2             # Detailed PV model with voltage-dependent behavior and voltage control mode
+    CONST_Z = 3             # Constant impedance model for PV system (for load flow only, no voltage control)
+    CONST_P = 4             # Constant power model for PV system (for load flow only, no voltage control)
+
+
+# Backward-compatible alias kept for existing PV-system imports.
+PVSysSimModelType = ConverterSimModelType
+
 @dataclass
 class TapChanger(ABC):
     """
@@ -980,7 +993,53 @@ class VoltageSourceShunt(ShuntElement):
         self.admittance = 1 / z_complex
 
 @dataclass
-class PVSystemShunt(ShuntElement):
+class ConverterBasedShunt(ShuntElement):
+    """Common short-circuit-based shunt model for converter-interfaced sources."""
+    rated_power_mva: float = 0.0
+    rated_voltage_kv: float = 0.0
+    sim_model: ConverterSimModelType = ConverterSimModelType.ACCORDING_TO_INPUT
+    uk_percent: float = 0.0
+    copper_losses_kw: float = 0.0
+    virtual_impedance_pu: complex | None = None  # Optional virtual impedance in pu on system base for stability enhancement
+
+    def __post_init__(self):
+        """Calculate admittance from converter short-circuit impedance data."""
+        if self.sim_model not in (ConverterSimModelType.VOLTAGE, ConverterSimModelType.ACCORDING_TO_INPUT):
+            self.admittance = complex(1e-12, 0.0)
+            return
+
+        if self.rated_power_mva <= 0 or self.rated_voltage_kv <= 0 or self.uk_percent <= 0:
+            self.admittance = complex(1e-12, -1e-12)
+            return
+
+        z_pu = self.uk_percent / 100.0
+        r_pu = max(self.copper_losses_kw, 0.0) / (1000.0 * self.rated_power_mva)
+        x_sq = max(z_pu ** 2 - r_pu ** 2, 0.0)
+        x_pu = math.sqrt(x_sq)
+        print(x_pu)
+
+        # Append virtual impedance if provided (for Virtual Synchronous Machine)
+        if self.virtual_impedance_pu is not None:
+            r_pu += self.virtual_impedance_pu.real
+            x_pu += self.virtual_impedance_pu.imag
+
+        if r_pu == 0.0 and x_pu == 0.0:
+            self.admittance = complex(1e-12, -1e-12)
+            return
+        z_base = (self.rated_voltage_kv ** 2) / self.rated_power_mva
+        z_ohm = complex(r_pu, x_pu) * z_base
+        self.admittance = 1 / z_ohm
+
+    def get_admittance_pu(self, base_mva: float = 100.0) -> complex:
+        """Get admittance in per-unit on system base using the converter rated voltage base."""
+        voltage_kv = self.rated_voltage_kv if self.rated_voltage_kv > 0 else self.voltage_kv
+        if voltage_kv > 0:
+            z_base = (voltage_kv ** 2) / base_mva
+            return self.admittance * z_base
+        return self.admittance
+
+@dataclass
+class PVSystemShunt(ConverterBasedShunt):
     """
     Photovoltaic system element (ElmPvsys).
 
@@ -992,30 +1051,31 @@ class PVSystemShunt(ShuntElement):
     - uk [%]: short-circuit impedance magnitude
     - Pcu [kW]: copper losses, used to derive the resistive part when available
     - sgn [MVA], ugn [kV]: rated power and rated voltage
+
+    Only VOLTAGE and ACCORDING_TO_INPUT simulation models are represented as
+    stability shunts. Other simulation models are treated as effectively
+    open-circuit so they do not contribute to the admittance matrix.
     """
-    rated_power_mva: float = 0.0
-    rated_voltage_kv: float = 0.0
-    uk_percent: float = 0.0
-    copper_losses_kw: float = 0.0
 
-    def __post_init__(self):
-        """Calculate admittance from PV short-circuit impedance data."""
-        if self.rated_power_mva <= 0 or self.rated_voltage_kv <= 0 or self.uk_percent <= 0:
-            self.admittance = complex(1e-12, -1e-12)
-            return
+@dataclass
+class StaticGeneratorShunt(ConverterBasedShunt):
+    """
+    Static generator element (ElmGenstat).
 
-        z_pu = self.uk_percent / 100.0
-        r_pu = max(self.copper_losses_kw, 0.0) / (1000.0 * self.rated_power_mva)
-        x_sq = max(z_pu ** 2 - r_pu ** 2, 0.0)
-        x_pu = math.sqrt(x_sq)
+    For stability-matrix purposes the static generator is modeled only by its
+    short-circuit impedance, represented as a shunt admittance behind the
+    converter/source impedance.
 
-        if r_pu == 0.0 and x_pu == 0.0:
-            self.admittance = complex(1e-12, -1e-12)
-            return
+    The impedance is derived on the static generator base from PowerFactory
+    inputs:
+    - uk [%]: short-circuit impedance magnitude
+    - Pcu [kW]: copper losses, used to derive the resistive part when available
+    - sgn [MVA], ugn [kV]: rated power and rated voltage
 
-        z_base = (self.rated_voltage_kv ** 2) / self.rated_power_mva
-        z_ohm = complex(r_pu, x_pu) * z_base
-        self.admittance = 1 / z_ohm
+    Only VOLTAGE and ACCORDING_TO_INPUT simulation models are represented as
+    stability shunts. Other simulation models are treated as effectively
+    open-circuit so they do not contribute to the admittance matrix.
+    """
 
 class ShuntFilterType(Enum):
     """Shunt filter/capacitor layout types matching PowerFactory ElmShnt."""
