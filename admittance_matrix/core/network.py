@@ -18,13 +18,11 @@ from ..matrices.analysis import calculate_power_distribution_ratios, calculate_p
 from ..matrices.topology import simplify_topology
 from ..adapters.powerfactory import get_network_elements, get_main_bus_names
 from ..adapters.powerfactory import run_load_flow, get_load_flow_results, get_generator_data_from_pf, get_voltage_source_data_from_pf, get_external_grid_data_from_pf
-from ..adapters.powerfactory import GeneratorResult, VoltageSourceResult, ExternalGridResult
 from ..adapters.powerfactory.results import BusResult, GeneratorResult, VoltageSourceResult, ExternalGridResult
 from .elements import BranchElement, ShuntElement, Transformer3WBranch, GeneratorShunt, VoltageSourceShunt, ExternalGridShunt
 from .reductionEngine import (
     Mode1OutageReduction,
     Mode1OutageUpdateError,
-    perform_reduction_mode1_from_stability_matrix,
     perform_reduction_mode2,
 )
 
@@ -75,6 +73,10 @@ class Network:
         self.shunts:            list[ShuntElement] = []                 # All shunt elements
         self.transformers_3w:   list[Transformer3WBranch] = []          # 3-winding transformers
         self.bus_names:         list[str] = []                          # List of unique bus names
+        self.syn_gens:          list[GeneratorShunt] = []
+        self.v_sources:         list[VoltageSourceShunt] = []
+        self.xnets:             list[ExternalGridShunt] = []
+        self.source_shunts:     list[SourceShunt] = []
 
         # =============== Bus mapping for simplified topology (original bus name to merged bus name) ===============
         self.bus_mapping:   dict[str, str] | None = None
@@ -132,6 +134,10 @@ class Network:
                 self._print_network_summary("Network after simplification:")
         
         self.bus_names = self._get_unique_buses(self.branches, self.shunts, self.transformers_3w)
+        self.syn_gens = [s for s in self.shunts if isinstance(s, GeneratorShunt)]
+        self.v_sources = [s for s in self.shunts if isinstance(s, VoltageSourceShunt)]
+        self.xnets = [s for s in self.shunts if isinstance(s, ExternalGridShunt)]
+        self.source_shunts = self.syn_gens + self.v_sources + self.xnets
     
     def _build_matrices(self) -> None:
         """
@@ -177,24 +183,26 @@ class Network:
                 self.syn_gens    = [s for s in self.shunts if isinstance(s, GeneratorShunt)]
                 self.v_sources   = [s for s in self.shunts if isinstance(s, VoltageSourceShunt)]
                 self.xnets       = [s for s in self.shunts if isinstance(s, ExternalGridShunt)]
+                self.source_shunts = self.syn_gens + self.v_sources + self.xnets
 
                 # Obtain LF results for ElmSyn, ElmGenStat, ExtGrid
                 self.gen_data   =   get_generator_data_from_pf(self.app, self.syn_gens, self.lf_results, self.base_mva)
                 self.vs_data    =   get_voltage_source_data_from_pf(self.app, self.v_sources, self.lf_results, self.base_mva)
                 self.xnet_data  =   get_external_grid_data_from_pf(self.app, self.xnets, self.lf_results, self.base_mva)
 
-                # Update source_names and source_types to include all source names from load flow data
-                self.source_names = [g.name for g in self.gen_data]
-                self.source_types = ['generator'] * len(self.gen_data)
-
-                self.source_names.extend([v.name for v in self.vs_data])
-                self.source_types.extend(['voltage_source'] * len(self.vs_data))
-
-                self.source_names.extend([x.name for x in self.xnet_data])
-                self.source_types.extend(['external_grid'] * len(self.xnet_data))
-
                 # Combined source data
                 self.source_data = self.gen_data + self.vs_data + self.xnet_data
+                source_shunts_by_name = {s.name: s for s in self.source_shunts}
+                missing_source_shunts = [
+                    source.name for source in self.source_data
+                    if source.name not in source_shunts_by_name
+                ]
+                if missing_source_shunts:
+                    raise RuntimeError(f"Source shunts not found for load-flow source data: {missing_source_shunts}")
+
+                self.source_shunts = [source_shunts_by_name[source.name] for source in self.source_data]
+                self.source_names = [s.name for s in self.source_data]
+                self.source_types = [s.source_type for s in self.source_data]
 
                 # ============= Update load admittances with actual load flow voltages =============
                 self._update_load_admittances_with_lf_voltage()
@@ -211,7 +219,7 @@ class Network:
         if self._bus_idx is None:
             raise RuntimeError("bus_idx is not initialized")
         
-        filtered_sources = self._get_sources_in_source_data_order()
+        filtered_sources = self.source_shunts
 
         # Get extended matrix with internal generator nodes (FULL EXTENDED MATRIX)
         self._Y_extended = extend_matrix_to_generator_internal_nodes(
@@ -228,42 +236,6 @@ class Network:
 
         return Y_reduced
     
-    def _get_all_sources(self, name_to_exclude: str | None = None) -> list[SourceShunt]:
-        """Get all source shunt elements (generators, voltage sources, external grids)."""
-        source_types = (GeneratorShunt, VoltageSourceShunt, ExternalGridShunt)
-        sources: list[SourceShunt] = []
-
-        for shunt in self.shunts:
-            if name_to_exclude is not None and shunt.name == name_to_exclude:
-                continue
-
-            if isinstance(shunt, source_types):
-                sources.append(shunt)
-
-        return sources
-
-    def _get_sources_in_source_data_order(self) -> list[SourceShunt]:
-        """Get source shunts ordered like source_data when load-flow data exists."""
-        all_sources = self._get_all_sources()
-        if self.source_data is None:
-            return all_sources
-
-        sources_by_name = {source.name: source for source in all_sources}
-        ordered_sources: list[SourceShunt] = []
-        missing_names: list[str] = []
-
-        for source_result in self.source_data:
-            source = sources_by_name.get(source_result.name)
-            if source is None:
-                missing_names.append(source_result.name)
-            else:
-                ordered_sources.append(source)
-
-        if missing_names:
-            raise RuntimeError(f"Source shunts not found for load-flow source data: {missing_names}")
-
-        return ordered_sources
-
     def _get_mode1_outage_reduction(self) -> Mode1OutageReduction:
         if self._Y_stab is None:
             raise RuntimeError("Must call build_matrices() first")
@@ -277,7 +249,7 @@ class Network:
                 Y_stab=self._Y_stab,
                 Y_reduced=self._Y_reduced,
                 bus_idx=self._bus_idx,
-                sources=self._get_sources_in_source_data_order(),
+                sources=self.source_shunts,
                 base_mva=self.base_mva,
             )
 
@@ -348,7 +320,6 @@ class Network:
         else:
             E_abs = np.array([np.abs(s.internal_voltage) for s in self.source_data], dtype=float).flatten()
             E_angle = np.array([np.angle(s.internal_voltage) for s in self.source_data], dtype=float).flatten()
-            print(len(E_abs), len(E_angle))
 
             source_names_order = [s.name for s in self.source_data]
             source_types_order = [s.source_type for s in self.source_data]
@@ -363,7 +334,10 @@ class Network:
                 branches=self.branches,
                 branches_3w_traformers=self.transformers_3w,
                 shunts=self.shunts,
-                filtered_sources=self._get_all_sources(name_to_exclude=disturbance_source_name),
+                filtered_sources=[
+                    source for source in self.source_shunts
+                    if source.name != disturbance_source_name
+                ],
                 BASE_MVA=self.base_mva,
                 excluded_source_name=disturbance_source_name,
             )

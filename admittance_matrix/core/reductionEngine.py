@@ -173,30 +173,6 @@ def _reduce_after_source_outage(
     indices_to_keep = list(range(len(sources)))
     return perform_kron_reduction(Y_extended, indices_to_keep)
 
-
-def perform_reduction_mode1_from_stability_matrix(
-    Y_stab: npt.NDArray[np.complex128],
-    bus_idx: dict[str, int],
-    sources: list[GeneratorShunt | VoltageSourceShunt | ExternalGridShunt],
-    BASE_MVA: float,
-    excluded_source_name: str,
-) -> npt.NDArray[np.complex128]:
-    """
-    Perform Mode 1 reduction from an already-built stability matrix.
-
-    The old Mode 1 path rebuilt the full stability matrix for every outage just
-    to omit one source admittance. This helper keeps the same result by copying
-    the pre-built stability matrix and subtracting that one source admittance from
-    the corresponding bus diagonal before extending and Kron-reducing.
-    """
-    return _reduce_after_source_outage(
-        Y_stab=Y_stab,
-        bus_idx=bus_idx,
-        sources=sources,
-        base_mva=BASE_MVA,
-        excluded_source_name=excluded_source_name,
-    )
-
 def perform_reduction_mode1(
         bus_names: list[str],
         branches: list[BranchElement],
