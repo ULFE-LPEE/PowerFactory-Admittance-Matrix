@@ -14,7 +14,12 @@ from typing import Literal
 
 from ..matrices.builder import build_admittance_matrix, build_admittance_matrices, MatrixBuildResult, MatrixType
 from ..matrices.reducer import extend_matrix_to_generator_internal_nodes, perform_kron_reduction, perform_kron_reduction_on_busbars
-from ..matrices.analysis import calculate_power_distribution_ratios, calculate_power_distribution_ratios_from_reduced_column, calculate_power_distribution_ratios_prefault_postfault
+from ..matrices.analysis import (
+    calculate_power_distribution_ratios,
+    calculate_power_distribution_ratios_from_postfault_currents,
+    calculate_power_distribution_ratios_from_reduced_column,
+    calculate_power_distribution_ratios_prefault_postfault,
+)
 from ..matrices.topology import simplify_topology
 from ..adapters.powerfactory import get_network_elements, get_main_bus_names
 from ..adapters.powerfactory import run_load_flow, get_load_flow_results, get_generator_data_from_pf, get_voltage_source_data_from_pf, get_external_grid_data_from_pf
@@ -23,6 +28,8 @@ from .elements import BranchElement, ShuntElement, Transformer3WBranch, Generato
 from .reductionEngine import (
     Mode1OutageReduction,
     Mode1OutageUpdateError,
+    Mode2OutageEvaluation,
+    Mode2OutageEvaluationError,
     perform_reduction_mode2,
 )
 
@@ -91,6 +98,7 @@ class Network:
         self._bus_idx:  dict[str, int] | None = None                  # Mapping of bus names to indices in Y matrices
         self._Y_reduced: npt.NDArray[np.complex128] | None = None   # Reduced to generator internal buses
         self._mode1_outage_reduction: Mode1OutageReduction | None = None
+        self._mode2_outage_evaluation: Mode2OutageEvaluation | None = None
 
         # =============== Load-Flow Snapshot ===============
         # Busbars Load-Flow results
@@ -156,6 +164,7 @@ class Network:
         self._Y_stab = matrices.y_stab
         self._bus_idx = matrices.bus_idx
         self._mode1_outage_reduction = None
+        self._mode2_outage_evaluation = None
 
         # Build reduced matrix to generator internal nodes
         self._Y_reduced = self._reduce_network_to_internal_generator_nodes()
@@ -285,6 +294,88 @@ class Network:
                 disturbance_source_name,
                 dist_angle_mode="terminal_current",
             )
+
+    def _get_mode2_outage_evaluation(self) -> Mode2OutageEvaluation:
+        if self._Y_stab is None:
+            raise RuntimeError("Must call build_matrices() first")
+        if self._bus_idx is None:
+            raise RuntimeError("bus_idx is not initialized")
+
+        if self._mode2_outage_evaluation is None:
+            self._mode2_outage_evaluation = Mode2OutageEvaluation.from_prefault_matrices(
+                Y_stab=self._Y_stab,
+                bus_idx=self._bus_idx,
+                sources=self.source_shunts,
+                base_mva=self.base_mva,
+            )
+
+        return self._mode2_outage_evaluation
+
+    def _calculate_power_ratios_mode2(
+        self,
+        disturbance_source_name: str,
+    ) -> tuple[npt.NDArray[np.float64], list[str], list[str]]:
+        if self._Y_reduced is None:
+            raise RuntimeError("Must call reduce_to_generators() first")
+        if self.source_data is None:
+            raise RuntimeError("Source data is not available. Ensure run_load_flow() has been called.")
+
+        E_abs = np.array([np.abs(s.internal_voltage) for s in self.source_data], dtype=float).flatten()
+        E_angle = np.array([np.angle(s.internal_voltage) for s in self.source_data], dtype=float).flatten()
+        source_voltages = E_abs * np.exp(1j * E_angle)
+
+        source_names_order = [s.name for s in self.source_data]
+        source_types_order = [s.source_type for s in self.source_data]
+
+        dist_idx = source_names_order.index(disturbance_source_name) if disturbance_source_name in source_names_order else None
+        if dist_idx is None:
+            raise ValueError(f"Disturbance source '{disturbance_source_name}' not found in source names")
+
+        n_sources = len(source_names_order)
+        keep_idx = [i for i in range(n_sources) if i != dist_idx]
+
+        try:
+            I_mode2 = self._get_mode2_outage_evaluation().postfault_currents_after_outage(
+                source_voltages,
+                disturbance_source_name,
+            )
+            ratios, _ = calculate_power_distribution_ratios_from_postfault_currents(
+                self._Y_reduced,
+                I_mode2,
+                E_abs,
+                E_angle,
+                dist_idx=dist_idx,
+                keep_idx=keep_idx,
+            )
+        except Mode2OutageEvaluationError as exc:
+            logger.warning(
+                "Mode 2 direct current evaluation unavailable for %s: %s. Falling back to direct reduction.",
+                disturbance_source_name,
+                exc,
+            )
+
+            Y_mode2 = perform_reduction_mode2(
+                bus_names=self.bus_names,
+                branches=self.branches,
+                branches_3w_traformers=self.transformers_3w,
+                shunts=self.shunts,
+                filtered_sources=[
+                    source for source in self.source_shunts
+                    if source.name != disturbance_source_name
+                ],
+                BASE_MVA=self.base_mva,
+                excluded_source_name=disturbance_source_name,
+            )
+            ratios, _ = calculate_power_distribution_ratios_prefault_postfault(
+                self._Y_reduced,
+                Y_mode2,
+                E_abs,
+                E_angle,
+                dist_idx=dist_idx,
+                keep_idx=keep_idx,
+            )
+
+        return ratios, source_names_order, source_types_order
     
     def calculate_power_ratios(self, disturbance_source_name: str, MODE: Literal[0, 1, 2] = 1) -> tuple[npt.NDArray[np.float64], list[str], list[str]]:
         """
@@ -318,37 +409,8 @@ class Network:
 
         # ============== MODE 2: Calculation of power ratios using pre-fault and post-fault admittance matrices ===============
         else:
-            E_abs = np.array([np.abs(s.internal_voltage) for s in self.source_data], dtype=float).flatten()
-            E_angle = np.array([np.angle(s.internal_voltage) for s in self.source_data], dtype=float).flatten()
-
-            source_names_order = [s.name for s in self.source_data]
-            source_types_order = [s.source_type for s in self.source_data]
-
-            # Find the index of the disturbance source
-            dist_idx = source_names_order.index(disturbance_source_name) if disturbance_source_name in source_names_order else None
-            if dist_idx is None:
-                raise ValueError(f"Disturbance source '{disturbance_source_name}' not found in source names")
-
-            Y_mode2 = perform_reduction_mode2(
-                bus_names=self.bus_names,
-                branches=self.branches,
-                branches_3w_traformers=self.transformers_3w,
-                shunts=self.shunts,
-                filtered_sources=[
-                    source for source in self.source_shunts
-                    if source.name != disturbance_source_name
-                ],
-                BASE_MVA=self.base_mva,
-                excluded_source_name=disturbance_source_name,
-            )
-            
-            # Get all indices except the disturbance source
-            n_sources = len(source_names_order)
-            keep_idx = [i for i in range(n_sources) if i != dist_idx]
-            
-            ratios, _ = calculate_power_distribution_ratios_prefault_postfault(
-                        self._Y_reduced, Y_mode2, E_abs, E_angle, 
-                        dist_idx=dist_idx, keep_idx=keep_idx
+            ratios, source_names_order, source_types_order = self._calculate_power_ratios_mode2(
+                disturbance_source_name
             )
         return ratios, source_names_order, source_types_order
     

@@ -118,6 +118,34 @@ def calculate_power_distribution_ratios_prefault_postfault(
         """
         # Internal EMFs as phasors (prefault)
         E0 = E_abs * np.exp(1j * E_angle)
+        E1 = E0[keep_idx]
+        I1 = Y_red_after @ E1
+
+        return calculate_power_distribution_ratios_from_postfault_currents(
+            Y_red_before=Y_red_before,
+            I_after_keep=I1,
+            E_abs=E_abs,
+            E_angle=E_angle,
+            dist_idx=dist_idx,
+            keep_idx=keep_idx,
+            sbase_mva=sbase_mva,
+        )
+
+
+def calculate_power_distribution_ratios_from_postfault_currents(
+        Y_red_before: np.ndarray,
+        I_after_keep: np.ndarray,
+        E_abs: np.ndarray,
+        E_angle: np.ndarray,
+        dist_idx: int,
+        keep_idx: list[int],
+        sbase_mva: float = 100.0,
+    ) -> tuple[npt.NDArray[np.float64], dict[str, Any]]:
+        """
+        Compute t=0+ redistribution shares when post-trip currents are already known.
+        """
+        # Internal EMFs as phasors (prefault)
+        E0 = E_abs * np.exp(1j * E_angle)
 
         # --- Prefault internal currents and powers (all machines)
         I0 = Y_red_before @ E0
@@ -126,7 +154,12 @@ def calculate_power_distribution_ratios_prefault_postfault(
 
         # --- Post-trip: remaining internal EMFs (assumed unchanged at t=0+)
         E1 = E0[keep_idx]
-        I1 = Y_red_after @ E1
+        if I_after_keep.shape != E1.shape:
+            raise ValueError(
+                f"I_after_keep shape {I_after_keep.shape} does not match remaining source count {E1.shape}."
+            )
+
+        I1 = I_after_keep
         S1 = E1 * np.conj(I1)
         P1 = np.real(S1)
 

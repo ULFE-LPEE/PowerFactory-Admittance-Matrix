@@ -144,6 +144,111 @@ class Mode1OutageUpdateError(Exception):
     """Raised when the rank-one outage update should use direct reduction."""
 
 
+@dataclass(slots=True)
+class Mode2OutageEvaluation:
+    """Reusable Mode 2 data for evaluating post-trip source currents."""
+
+    source_names: list[str]
+    source_bus_positions: npt.NDArray[np.int_]
+    source_admittances: npt.NDArray[np.complex128]
+    inverse_at_source_buses: npt.NDArray[np.complex128]
+
+    @classmethod
+    def from_prefault_matrices(
+        cls,
+        Y_stab: npt.NDArray[np.complex128],
+        bus_idx: dict[str, int],
+        sources: list[GeneratorShunt | VoltageSourceShunt | ExternalGridShunt],
+        base_mva: float,
+    ) -> "Mode2OutageEvaluation":
+        """
+        Create reusable Mode 2 outage data from the prefault bus matrix.
+
+        Mode 2 needs post-trip currents of the remaining source internal nodes.
+        Those currents can be evaluated from the Kron-reduction block formula
+        using selected inverse columns of the prefault bus matrix.
+        """
+        source_names = [source.name for source in sources]
+        source_bus_indices = np.array([bus_idx[source.bus_name] for source in sources], dtype=int)
+        source_admittances = np.array([source.get_admittance_pu(base_mva) for source in sources], dtype=np.complex128)
+        unique_bus_indices = np.array(sorted(set(int(idx) for idx in source_bus_indices)), dtype=int)
+        bus_position_by_index = {int(bus_i): pos for pos, bus_i in enumerate(unique_bus_indices)}
+        source_bus_positions = np.array(
+            [bus_position_by_index[int(bus_i)] for bus_i in source_bus_indices],
+            dtype=int,
+        )
+
+        bus_selector = np.zeros((Y_stab.shape[0], len(unique_bus_indices)), dtype=np.complex128)
+        for pos, bus_i in enumerate(unique_bus_indices):
+            bus_selector[int(bus_i), pos] = 1.0
+
+        try:
+            inverse_bus_columns = np.linalg.solve(Y_stab, bus_selector)
+        except np.linalg.LinAlgError as exc:
+            raise Mode2OutageEvaluationError("base stability matrix solve failed") from exc
+
+        return cls(
+            source_names=source_names,
+            source_bus_positions=source_bus_positions,
+            source_admittances=source_admittances,
+            inverse_at_source_buses=inverse_bus_columns[source_bus_indices, :],
+        )
+
+    def postfault_currents_after_outage(
+        self,
+        source_voltages: npt.NDArray[np.complex128],
+        disturbance_source_name: str,
+        denominator_tolerance: float = 1e-10,
+    ) -> npt.NDArray[np.complex128]:
+        """
+        Return post-trip internal currents for the remaining sources.
+
+        This is equivalent to building the post-trip reduced matrix and
+        multiplying it by the remaining source voltages, but avoids forming the
+        reduced matrix for every outage.
+        """
+        if disturbance_source_name not in self.source_names:
+            raise ValueError(f"Source '{disturbance_source_name}' not found. Available: {self.source_names}")
+        if source_voltages.shape != (len(self.source_names),):
+            raise ValueError(
+                f"source_voltages shape {source_voltages.shape} does not match source count {len(self.source_names)}."
+            )
+
+        dist_idx = self.source_names.index(disturbance_source_name)
+        dist_bus_pos = int(self.source_bus_positions[dist_idx])
+        dist_admittance = self.source_admittances[dist_idx]
+
+        bus_current_injections = np.zeros(self.inverse_at_source_buses.shape[1], dtype=np.complex128)
+        source_current_injections = -self.source_admittances * source_voltages
+        np.add.at(bus_current_injections, self.source_bus_positions, source_current_injections)
+        bus_current_injections[dist_bus_pos] -= source_current_injections[dist_idx]
+
+        base_bus_voltages_at_sources = self.inverse_at_source_buses @ bus_current_injections
+        base_inverse_at_outage_bus = self.inverse_at_source_buses[dist_idx, dist_bus_pos]
+        denominator = 1.0 - dist_admittance * base_inverse_at_outage_bus
+        if abs(denominator) < denominator_tolerance:
+            raise Mode2OutageEvaluationError(
+                f"rank-one update denominator is near zero for '{disturbance_source_name}'"
+            )
+
+        outage_update = (
+            dist_admittance
+            / denominator
+            * self.inverse_at_source_buses[:, dist_bus_pos]
+            * base_bus_voltages_at_sources[dist_idx]
+        )
+        bus_voltages_at_sources = base_bus_voltages_at_sources + outage_update
+
+        keep_idx = [idx for idx in range(len(self.source_names)) if idx != dist_idx]
+        return self.source_admittances[keep_idx] * (
+            source_voltages[keep_idx] + bus_voltages_at_sources[keep_idx]
+        )
+
+
+class Mode2OutageEvaluationError(Exception):
+    """Raised when Mode 2 direct current evaluation should use direct reduction."""
+
+
 def _reduce_after_source_outage(
     Y_stab: npt.NDArray[np.complex128],
     bus_idx: dict[str, int],
