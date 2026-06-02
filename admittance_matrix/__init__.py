@@ -76,6 +76,7 @@ from .matrices import (
     build_admittance_matrix,
     perform_kron_reduction,
     calculate_power_distribution_ratios,
+    calculate_power_distribution_ratios_from_reduced_column,
 )
 
 # PowerFactory adapter functions (new canonical location)
@@ -122,6 +123,7 @@ __all__ = [
     'build_admittance_matrix',
     'perform_kron_reduction',
     'calculate_power_distribution_ratios',
+    'calculate_power_distribution_ratios_from_reduced_column',
     
     # Result classes
     'BusResult',

@@ -16,6 +16,7 @@ from .reducer import (
 
 from .analysis import (
     calculate_power_distribution_ratios,
+    calculate_power_distribution_ratios_from_reduced_column,
     calculate_power_distribution_ratios_prefault_postfault,
 )
 
@@ -36,6 +37,7 @@ __all__ = [
 
     # Analysis (Power distribution ratios)
     'calculate_power_distribution_ratios',
+    'calculate_power_distribution_ratios_from_reduced_column',
     'calculate_power_distribution_ratios_prefault_postfault',
 
     # Topology
