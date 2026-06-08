@@ -460,6 +460,10 @@ def get_network_elements(app) -> tuple[list[BranchElement], list[ShuntElement], 
         # Get generator Zone name
         zone = gen.GetAttribute('cpZone')
         zone_name = zone.GetAttribute('loc_name') if zone is not None else "None"
+
+        # Get generator Grid name
+        grid = gen.GetAttribute('cpGrid')
+        grid_name = grid.GetAttribute('loc_name') if grid is not None else "None"
         
         shunts.append(GeneratorShunt(
             name=gen.GetAttribute('loc_name'),
@@ -469,7 +473,8 @@ def get_network_elements(app) -> tuple[list[BranchElement], list[ShuntElement], 
             rated_voltage_kv=rated_kv,
             z_pu = z_pu,
             n_parallel=n_parallel,
-            zone=zone_name
+            zone=zone_name,
+            grid_code=grid_name
         ))
 
     # --- Shunt elements: Loads (ElmLod) ---

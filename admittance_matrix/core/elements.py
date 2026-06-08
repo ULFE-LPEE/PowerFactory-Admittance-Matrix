@@ -839,6 +839,7 @@ class ShuntElement(ABC):
     voltage_kv: float
     admittance: complex = field(init=False)
     zone : str = "None"  # Optional zone or area identifier
+    grid_code: str = "None"  # Optional grid code identifier
     
     def get_admittance_pu(self, base_mva: float = 100.0) -> complex:
         """

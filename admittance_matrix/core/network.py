@@ -500,6 +500,27 @@ class Network:
         logger.warning(f"Zone not found for source: {source_name}")
         return "None"
     
+    def get_grid(self, source_name: str) -> str | None:
+        """
+        Get the grid for a source (generator or voltage source).
+        
+        Args:
+            source_name: Name of the source
+            
+        Returns:
+            Zone name string, or None if not found
+        """
+        # Find the source in shunts list
+        for shunt in self.shunts:
+            if shunt.name == source_name:
+                if shunt.grid_code is not None:
+                    return shunt.grid_code
+                else:
+                    return "None"
+        
+        logger.warning(f"Grid not found for source: {source_name}")
+        return "None"
+    
     def _update_load_admittances_with_lf_voltage(self) -> None:
         """
         Update load admittances using actual load flow bus voltages.
