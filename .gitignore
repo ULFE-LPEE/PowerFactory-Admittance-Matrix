@@ -3,6 +3,13 @@ __pycache__/
 *.py[cod]
 *$py.class
 
+# Python package builds and test artifacts
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.coverage
+
 # Jupyter Notebook
 .ipynb_checkpoints/
 

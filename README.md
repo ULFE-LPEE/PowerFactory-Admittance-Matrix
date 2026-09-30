@@ -30,17 +30,34 @@ To update to the latest version:
 pip install --upgrade git+https://github.com/ULFE-LPEE/PowerFactory-Admittance-Matrix.git
 ```
 
-### Local Development
+### Local development
 
-```bash
-pip install -e .
+The project uses [uv](https://docs.astral.sh/uv/) to manage its development
+environment. Python 3.12 is selected by `.python-version`; the package itself
+supports Python 3.10 and newer. The PowerFactory Python module is supplied by a
+licensed PowerFactory installation and is not available from PyPI. Before
+importing this library, make the PowerFactory Python API directory available to
+the chosen interpreter through `PYTHONPATH`. Its Python version must match the
+interpreter in the uv environment. Do not add a machine-specific API path to
+the repository.
+
+From the repository root, run:
+
+```powershell
+uv sync --extra speed
+uv run --extra speed python -c "import admittance_matrix; print(admittance_matrix.__version__)"
 ```
+
+`uv sync` installs the library in editable mode, so changes to its Python source
+are available on the next Python process. Commit `uv.lock` with dependency
+updates, and use `uv sync --locked` when reproducing a recorded environment.
+The `speed` extra installs SciPy for the optional sparse Kron-reduction path;
+without it, the library uses NumPy's dense solver. Development tools are in
+the `dev` dependency group, which uv includes by default.
 
 ## Quick Start
 
 ```python
-import sys
-sys.path.insert(0, r"C:\Program Files\DIgSILENT\PowerFactory 2024 SP4A\Python\3.12")
 import powerfactory as pf
 
 from admittance_matrix import Network
