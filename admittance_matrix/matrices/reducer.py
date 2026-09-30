@@ -11,6 +11,13 @@ import numpy as np
 import numpy.typing as npt
 from ..core.elements import ShuntElement, GeneratorShunt, VoltageSourceShunt, ExternalGridShunt
 
+try:
+    import scipy.sparse as sp
+    import scipy.sparse.linalg as spla
+except ImportError:  # pragma: no cover - optional speed-up dependency
+    sp = None
+    spla = None
+
 logger = logging.getLogger(__name__)
 
 def perform_kron_reduction(
@@ -27,6 +34,14 @@ def perform_kron_reduction(
     Y_AB = Y[np.ix_(indices_to_keep, indices_to_eliminate)]
     Y_BA = Y[np.ix_(indices_to_eliminate, indices_to_keep)]
     Y_BB = Y[np.ix_(indices_to_eliminate, indices_to_eliminate)]
+
+    if sp is not None and spla is not None and Y_BB.size:
+        density = np.count_nonzero(Y_BB) / Y_BB.size
+        if density <= 0.15:
+            solution = spla.spsolve(sp.csc_matrix(Y_BB), Y_BA)
+            if solution.ndim == 1:
+                solution = solution.reshape(-1, 1)
+            return Y_AA - Y_AB @ solution
 
     return Y_AA - Y_AB @ np.linalg.solve(Y_BB, Y_BA)
 
