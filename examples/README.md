@@ -1,6 +1,6 @@
 # Examples
 
-This folder contains Jupyter notebooks demonstrating how to use the `admittance_matrix` library.
+This folder contains Jupyter notebooks demonstrating how to use the `src` library package.
 
 ## Prerequisites
 
@@ -12,7 +12,7 @@ This folder contains Jupyter notebooks demonstrating how to use the `admittance_
 When creating a `Network` object, you can use the following options:
 
 ```python
-from admittance_matrix import Network
+from src import Network
 
 # Basic usage
 net = Network(app, base_mva=100.0)

@@ -35,17 +35,16 @@ pip install --upgrade git+https://github.com/ULFE-LPEE/PowerFactory-Admittance-M
 The project uses [uv](https://docs.astral.sh/uv/) to manage its development
 environment. Python 3.12 is selected by `.python-version`; the package itself
 supports Python 3.10 and newer. The PowerFactory Python module is supplied by a
-licensed PowerFactory installation and is not available from PyPI. Before
-importing this library, make the PowerFactory Python API directory available to
-the chosen interpreter through `PYTHONPATH`. Its Python version must match the
-interpreter in the uv environment. Do not add a machine-specific API path to
-the repository.
+licensed PowerFactory installation and is not available from PyPI. Copy
+`.env.example` to `.env` and set `POWERFACTORY_PYTHON_PATH` to the API directory
+whose Python version matches the uv environment. The local `.env` is ignored by
+Git. An environment variable with the same name overrides the `.env` value.
 
 From the repository root, run:
 
 ```powershell
 uv sync --extra speed
-uv run --extra speed python -c "import admittance_matrix; print(admittance_matrix.__version__)"
+uv run --extra speed python -c "import src; print(src.__version__)"
 ```
 
 `uv sync` installs the library in editable mode, so changes to its Python source
@@ -54,19 +53,26 @@ updates, and use `uv sync --locked` when reproducing a recorded environment.
 The `speed` extra installs SciPy for the optional sparse Kron-reduction path;
 without it, the library uses NumPy's dense solver. Development tools are in
 the `dev` dependency group, which uv includes by default.
+For the example notebook, also install the `notebook` group and select this
+project's uv environment as its Jupyter kernel.
+
+```powershell
+uv sync --extra speed --group notebook
+```
+
+The importable package is now `src`, containing `core`, `matrices`, `adapters`,
+and `utils`. This is a breaking import change; existing `admittance_matrix`
+imports need to be updated in consuming projects.
 
 ## Quick Start
 
 ```python
-import powerfactory as pf
+from src import Network, connect
 
-from admittance_matrix import Network
-from admittance_matrix.utils import init_project
 import pandas as pd
 
 # Connect to PowerFactory
-app = pf.GetApplicationExt()
-init_project(app, "Lokalizacija\\11_bus_radial_system") # Enter your PF project path here
+app = connect("Lokalizacija\\11_bus_radial_system", show=True)
 
 # Initialize network and build matrices
 net = Network(app, base_mva=100.0)
@@ -86,7 +92,7 @@ pd.DataFrame(Y_loadflow, index=net.bus_names, columns=net.bus_names)
 ## Module Structure
 
 ```
-admittance_matrix/
+src/
 ├── adapters/
 │   └── powerfactory/     # PowerFactory-specific code
 │       ├── extractor.py  # Network element extraction
@@ -103,6 +109,7 @@ admittance_matrix/
 │   ├── analysis.py       # Power distribution ratio calculations
 │   └── topology.py       # Used for network simplification
 └── utils/
+    ├── connection.py     # PowerFactory API path, import, and project connection
     └── helpers.py        # Utility functions
 ```
 
@@ -112,13 +119,13 @@ By default, the library produces no console output. To enable logging:
 
 ```python
 import logging
-logging.getLogger("admittance_matrix").setLevel(logging.WARNING)
+logging.getLogger("src").setLevel(logging.WARNING)
 ```
 
 For detailed debug output:
 
 ```python
-logging.getLogger("admittance_matrix").setLevel(logging.INFO)
+logging.getLogger("src").setLevel(logging.INFO)
 ```
 
 ## License

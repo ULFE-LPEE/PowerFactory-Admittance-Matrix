@@ -20,6 +20,7 @@ ipython_config.py
 # Environments
 .env
 .venv
+.venv-notebook
 
 # VS Code
 .vscode/

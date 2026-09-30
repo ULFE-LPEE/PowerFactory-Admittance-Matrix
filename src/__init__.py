@@ -16,7 +16,7 @@ Quick Start
 
 Using the high-level Network class:
 
-    from admittance_matrix import Network
+    from src import Network
     
     # Initialize network from PowerFactory
     net = Network(app, base_mva=100.0)
@@ -39,16 +39,22 @@ This library uses Python's standard logging module. By default, no output is sho
 To enable logging:
 
     import logging
-    logging.getLogger("admittance_matrix").setLevel(logging.INFO)
+    logging.getLogger("src").setLevel(logging.INFO)
     
 For detailed debug output:
 
-    logging.getLogger("admittance_matrix").setLevel(logging.DEBUG)
+    logging.getLogger("src").setLevel(logging.DEBUG)
 """
 
 import logging
 
-__version__ = "0.1.6"
+from .utils.connection import load_powerfactory
+
+# The existing modules import PowerFactory at module load time. Configure its
+# API path before importing those modules below.
+load_powerfactory()
+
+__version__ = "0.2.0.dev0"
 
 # Configure library logging (NullHandler prevents "No handler found" warnings)
 logging.getLogger(__name__).addHandler(logging.NullHandler())
@@ -96,6 +102,7 @@ from .adapters.powerfactory import (
 
 # Utilities
 from .utils import (
+    connect,
     init_project,
     import_pfd_file,
 )
@@ -103,6 +110,7 @@ from .utils import (
 __all__ = [
     # Version
     '__version__',
+    'load_powerfactory',
     
     # Core classes
     'Network',
@@ -141,6 +149,7 @@ __all__ = [
     'get_external_grid_data_from_pf',
     
     # Utilities
+    'connect',
     'init_project',
     'import_pfd_file',
 ]

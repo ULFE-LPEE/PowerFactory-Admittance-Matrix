@@ -7,7 +7,7 @@ from dataclasses import dataclass
 import numpy as np
 import numpy.typing as npt
 
-from admittance_matrix.core.elements import (
+from .elements import (
     BranchElement,
     GeneratorShunt,
     ShuntElement,
@@ -15,8 +15,8 @@ from admittance_matrix.core.elements import (
     VoltageSourceShunt,
     ExternalGridShunt,
 )
-from admittance_matrix.matrices.builder import build_admittance_matrix, MatrixType
-from admittance_matrix.matrices.reducer import extend_matrix_to_generator_internal_nodes, perform_kron_reduction
+from ..matrices.builder import build_admittance_matrix, MatrixType
+from ..matrices.reducer import extend_matrix_to_generator_internal_nodes, perform_kron_reduction
 
 
 @dataclass(slots=True)
