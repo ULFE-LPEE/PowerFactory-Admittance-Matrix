@@ -14,14 +14,24 @@ from typing import Literal
 
 from ..matrices.builder import build_admittance_matrix, build_admittance_matrices, MatrixBuildResult, MatrixType
 from ..matrices.reducer import extend_matrix_to_generator_internal_nodes, perform_kron_reduction, perform_kron_reduction_on_busbars
-from ..matrices.analysis import calculate_power_distribution_ratios, calculate_power_distribution_ratios_prefault_postfault
+from ..matrices.analysis import (
+    calculate_power_distribution_ratios,
+    calculate_power_distribution_ratios_from_postfault_currents,
+    calculate_power_distribution_ratios_from_reduced_column,
+    calculate_power_distribution_ratios_prefault_postfault,
+)
 from ..matrices.topology import simplify_topology
 from ..adapters.powerfactory import get_network_elements, get_main_bus_names
 from ..adapters.powerfactory import run_load_flow, get_load_flow_results, get_generator_data_from_pf, get_voltage_source_data_from_pf, get_external_grid_data_from_pf
-from ..adapters.powerfactory import GeneratorResult, VoltageSourceResult, ExternalGridResult
 from ..adapters.powerfactory.results import BusResult, GeneratorResult, VoltageSourceResult, ExternalGridResult
 from .elements import BranchElement, ShuntElement, Transformer3WBranch, GeneratorShunt, VoltageSourceShunt, ExternalGridShunt
-from .reductionEngine import perform_reduction_mode1, perform_reduction_mode2
+from .reductionEngine import (
+    Mode1OutageReduction,
+    Mode1OutageUpdateError,
+    Mode2OutageEvaluation,
+    Mode2OutageEvaluationError,
+    perform_reduction_mode2,
+)
 
 logger = logging.getLogger(__name__)
 SourceShunt = GeneratorShunt | VoltageSourceShunt | ExternalGridShunt
@@ -70,6 +80,10 @@ class Network:
         self.shunts:            list[ShuntElement] = []                 # All shunt elements
         self.transformers_3w:   list[Transformer3WBranch] = []          # 3-winding transformers
         self.bus_names:         list[str] = []                          # List of unique bus names
+        self.syn_gens:          list[GeneratorShunt] = []
+        self.v_sources:         list[VoltageSourceShunt] = []
+        self.xnets:             list[ExternalGridShunt] = []
+        self.source_shunts:     list[SourceShunt] = []
 
         # =============== Bus mapping for simplified topology (original bus name to merged bus name) ===============
         self.bus_mapping:   dict[str, str] | None = None
@@ -83,6 +97,8 @@ class Network:
         self._Y_stab:   npt.NDArray[np.complex128] | None = None      # Admittance matrix including loads and generators
         self._bus_idx:  dict[str, int] | None = None                  # Mapping of bus names to indices in Y matrices
         self._Y_reduced: npt.NDArray[np.complex128] | None = None   # Reduced to generator internal buses
+        self._mode1_outage_reduction: Mode1OutageReduction | None = None
+        self._mode2_outage_evaluation: Mode2OutageEvaluation | None = None
 
         # =============== Load-Flow Snapshot ===============
         # Busbars Load-Flow results
@@ -126,6 +142,10 @@ class Network:
                 self._print_network_summary("Network after simplification:")
         
         self.bus_names = self._get_unique_buses(self.branches, self.shunts, self.transformers_3w)
+        self.syn_gens = [s for s in self.shunts if isinstance(s, GeneratorShunt)]
+        self.v_sources = [s for s in self.shunts if isinstance(s, VoltageSourceShunt)]
+        self.xnets = [s for s in self.shunts if isinstance(s, ExternalGridShunt)]
+        self.source_shunts = self.syn_gens + self.v_sources + self.xnets
     
     def _build_matrices(self) -> None:
         """
@@ -143,6 +163,8 @@ class Network:
         self._Y_lf = matrices.y_lf
         self._Y_stab = matrices.y_stab
         self._bus_idx = matrices.bus_idx
+        self._mode1_outage_reduction = None
+        self._mode2_outage_evaluation = None
 
         # Build reduced matrix to generator internal nodes
         self._Y_reduced = self._reduce_network_to_internal_generator_nodes()
@@ -170,24 +192,26 @@ class Network:
                 self.syn_gens    = [s for s in self.shunts if isinstance(s, GeneratorShunt)]
                 self.v_sources   = [s for s in self.shunts if isinstance(s, VoltageSourceShunt)]
                 self.xnets       = [s for s in self.shunts if isinstance(s, ExternalGridShunt)]
+                self.source_shunts = self.syn_gens + self.v_sources + self.xnets
 
                 # Obtain LF results for ElmSyn, ElmGenStat, ExtGrid
                 self.gen_data   =   get_generator_data_from_pf(self.app, self.syn_gens, self.lf_results, self.base_mva)
                 self.vs_data    =   get_voltage_source_data_from_pf(self.app, self.v_sources, self.lf_results, self.base_mva)
                 self.xnet_data  =   get_external_grid_data_from_pf(self.app, self.xnets, self.lf_results, self.base_mva)
 
-                # Update source_names and source_types to include all source names from load flow data
-                self.source_names = [g.name for g in self.gen_data]
-                self.source_types = ['generator'] * len(self.gen_data)
-
-                self.source_names.extend([v.name for v in self.vs_data])
-                self.source_types.extend(['voltage_source'] * len(self.vs_data))
-
-                self.source_names.extend([x.name for x in self.xnet_data])
-                self.source_types.extend(['external_grid'] * len(self.xnet_data))
-
                 # Combined source data
                 self.source_data = self.gen_data + self.vs_data + self.xnet_data
+                source_shunts_by_name = {s.name: s for s in self.source_shunts}
+                missing_source_shunts = [
+                    source.name for source in self.source_data
+                    if source.name not in source_shunts_by_name
+                ]
+                if missing_source_shunts:
+                    raise RuntimeError(f"Source shunts not found for load-flow source data: {missing_source_shunts}")
+
+                self.source_shunts = [source_shunts_by_name[source.name] for source in self.source_data]
+                self.source_names = [s.name for s in self.source_data]
+                self.source_types = [s.source_type for s in self.source_data]
 
                 # ============= Update load admittances with actual load flow voltages =============
                 self._update_load_admittances_with_lf_voltage()
@@ -204,7 +228,7 @@ class Network:
         if self._bus_idx is None:
             raise RuntimeError("bus_idx is not initialized")
         
-        filtered_sources = self._get_all_sources()
+        filtered_sources = self.source_shunts
 
         # Get extended matrix with internal generator nodes (FULL EXTENDED MATRIX)
         self._Y_extended = extend_matrix_to_generator_internal_nodes(
@@ -221,25 +245,137 @@ class Network:
 
         return Y_reduced
     
-    def _get_all_sources(self, name_to_exclude: str | None = None) -> list[SourceShunt]:
-        """Get all source shunt elements in canonical order."""
-        def keep(shunt: SourceShunt) -> bool:
-            return name_to_exclude is None or shunt.name != name_to_exclude
+    def _get_mode1_outage_reduction(self) -> Mode1OutageReduction:
+        if self._Y_stab is None:
+            raise RuntimeError("Must call build_matrices() first")
+        if self._Y_reduced is None:
+            raise RuntimeError("Must call reduce_to_generators() first")
+        if self._bus_idx is None:
+            raise RuntimeError("bus_idx is not initialized")
 
-        generators = [
-            shunt for shunt in self.shunts
-            if isinstance(shunt, GeneratorShunt) and keep(shunt)
-        ]
-        voltage_sources = [
-            shunt for shunt in self.shunts
-            if isinstance(shunt, VoltageSourceShunt) and keep(shunt)
-        ]
-        external_grids = [
-            shunt for shunt in self.shunts
-            if isinstance(shunt, ExternalGridShunt) and keep(shunt)
-        ]
+        if self._mode1_outage_reduction is None:
+            self._mode1_outage_reduction = Mode1OutageReduction.from_prefault_matrices(
+                Y_stab=self._Y_stab,
+                Y_reduced=self._Y_reduced,
+                bus_idx=self._bus_idx,
+                sources=self.source_shunts,
+                base_mva=self.base_mva,
+            )
 
-        return generators + voltage_sources + external_grids
+        return self._mode1_outage_reduction
+
+    def _calculate_power_ratios_mode1(
+        self,
+        disturbance_source_name: str,
+    ) -> tuple[npt.NDArray[np.float64], list[str], list[str]]:
+        if self.source_data is None:
+            raise RuntimeError("Source data is not available. Ensure run_load_flow() has been called.")
+
+        try:
+            outage_reduction = self._get_mode1_outage_reduction()
+            y_column = outage_reduction.reduced_column_after_outage(disturbance_source_name)
+            return calculate_power_distribution_ratios_from_reduced_column(
+                y_column,
+                self.source_data,
+                disturbance_source_name,
+                dist_angle_mode="terminal_current",
+            )
+        except Mode1OutageUpdateError as exc:
+            logger.warning(
+                "Mode 1 rank-one update unavailable for %s: %s. Falling back to direct reduction.",
+                disturbance_source_name,
+                exc,
+            )
+
+            Y_mode1 = self._get_mode1_outage_reduction().reduced_matrix_after_outage_direct(disturbance_source_name)
+            return calculate_power_distribution_ratios(
+                Y_mode1,
+                self.source_data,
+                disturbance_source_name,
+                dist_angle_mode="terminal_current",
+            )
+
+    def _get_mode2_outage_evaluation(self) -> Mode2OutageEvaluation:
+        if self._Y_stab is None:
+            raise RuntimeError("Must call build_matrices() first")
+        if self._bus_idx is None:
+            raise RuntimeError("bus_idx is not initialized")
+
+        if self._mode2_outage_evaluation is None:
+            self._mode2_outage_evaluation = Mode2OutageEvaluation.from_prefault_matrices(
+                Y_stab=self._Y_stab,
+                bus_idx=self._bus_idx,
+                sources=self.source_shunts,
+                base_mva=self.base_mva,
+            )
+
+        return self._mode2_outage_evaluation
+
+    def _calculate_power_ratios_mode2(
+        self,
+        disturbance_source_name: str,
+    ) -> tuple[npt.NDArray[np.float64], list[str], list[str]]:
+        if self._Y_reduced is None:
+            raise RuntimeError("Must call reduce_to_generators() first")
+        if self.source_data is None:
+            raise RuntimeError("Source data is not available. Ensure run_load_flow() has been called.")
+
+        E_abs = np.array([np.abs(s.internal_voltage) for s in self.source_data], dtype=float).flatten()
+        E_angle = np.array([np.angle(s.internal_voltage) for s in self.source_data], dtype=float).flatten()
+        source_voltages = E_abs * np.exp(1j * E_angle)
+
+        source_names_order = [s.name for s in self.source_data]
+        source_types_order = [s.source_type for s in self.source_data]
+
+        dist_idx = source_names_order.index(disturbance_source_name) if disturbance_source_name in source_names_order else None
+        if dist_idx is None:
+            raise ValueError(f"Disturbance source '{disturbance_source_name}' not found in source names")
+
+        n_sources = len(source_names_order)
+        keep_idx = [i for i in range(n_sources) if i != dist_idx]
+
+        try:
+            I_mode2 = self._get_mode2_outage_evaluation().postfault_currents_after_outage(
+                source_voltages,
+                disturbance_source_name,
+            )
+            ratios, _ = calculate_power_distribution_ratios_from_postfault_currents(
+                self._Y_reduced,
+                I_mode2,
+                E_abs,
+                E_angle,
+                dist_idx=dist_idx,
+                keep_idx=keep_idx,
+            )
+        except Mode2OutageEvaluationError as exc:
+            logger.warning(
+                "Mode 2 direct current evaluation unavailable for %s: %s. Falling back to direct reduction.",
+                disturbance_source_name,
+                exc,
+            )
+
+            Y_mode2 = perform_reduction_mode2(
+                bus_names=self.bus_names,
+                branches=self.branches,
+                branches_3w_traformers=self.transformers_3w,
+                shunts=self.shunts,
+                filtered_sources=[
+                    source for source in self.source_shunts
+                    if source.name != disturbance_source_name
+                ],
+                BASE_MVA=self.base_mva,
+                excluded_source_name=disturbance_source_name,
+            )
+            ratios, _ = calculate_power_distribution_ratios_prefault_postfault(
+                self._Y_reduced,
+                Y_mode2,
+                E_abs,
+                E_angle,
+                dist_idx=dist_idx,
+                keep_idx=keep_idx,
+            )
+
+        return ratios, source_names_order, source_types_order
     
     def calculate_power_ratios(self, disturbance_source_name: str, MODE: Literal[0, 1, 2] = 1) -> tuple[npt.NDArray[np.float64], list[str], list[str]]:
         """
@@ -267,51 +403,14 @@ class Network:
 
         # ============== MODE 1: Calculation of power ratios via missing generator admittance in M submatrix ===============
         elif MODE == 1:
-            filtered_sources = self._get_all_sources()
-            Y_mode1 = perform_reduction_mode1(
-                bus_names=self.bus_names,
-                branches=self.branches,
-                branches_3w_traformers=self.transformers_3w,
-                shunts=self.shunts,
-                sources=filtered_sources,
-                BASE_MVA=self.base_mva,
-                excluded_source_name=disturbance_source_name,
-            )
-            ratios, source_names_order, source_types_order = calculate_power_distribution_ratios(
-                Y_mode1, self.source_data, disturbance_source_name, dist_angle_mode="terminal_current"
+            ratios, source_names_order, source_types_order = self._calculate_power_ratios_mode1(
+                disturbance_source_name
             )
 
         # ============== MODE 2: Calculation of power ratios using pre-fault and post-fault admittance matrices ===============
         else:
-            E_abs = np.array([np.abs(s.internal_voltage) for s in self.source_data], dtype=float).flatten()
-            E_angle = np.array([np.angle(s.internal_voltage) for s in self.source_data], dtype=float).flatten()
-            print(len(E_abs), len(E_angle))
-
-            source_names_order = [s.name for s in self.source_data]
-            source_types_order = [s.source_type for s in self.source_data]
-
-            # Find the index of the disturbance source
-            dist_idx = source_names_order.index(disturbance_source_name) if disturbance_source_name in source_names_order else None
-            if dist_idx is None:
-                raise ValueError(f"Disturbance source '{disturbance_source_name}' not found in source names")
-
-            Y_mode2 = perform_reduction_mode2(
-                bus_names=self.bus_names,
-                branches=self.branches,
-                branches_3w_traformers=self.transformers_3w,
-                shunts=self.shunts,
-                filtered_sources=self._get_all_sources(name_to_exclude=disturbance_source_name),
-                BASE_MVA=self.base_mva,
-                excluded_source_name=disturbance_source_name,
-            )
-            
-            # Get all indices except the disturbance source
-            n_sources = len(source_names_order)
-            keep_idx = [i for i in range(n_sources) if i != dist_idx]
-            
-            ratios, _ = calculate_power_distribution_ratios_prefault_postfault(
-                        self._Y_reduced, Y_mode2, E_abs, E_angle, 
-                        dist_idx=dist_idx, keep_idx=keep_idx
+            ratios, source_names_order, source_types_order = self._calculate_power_ratios_mode2(
+                disturbance_source_name
             )
         return ratios, source_names_order, source_types_order
     
@@ -340,45 +439,45 @@ class Network:
                 - source_types: List of source types (column types)
         """
         self._hide()
+        try:
+            if self._Y_reduced is None:
+                raise RuntimeError("Must call reduce_to_generators() first")
+            if self.gen_data is None:
+                raise RuntimeError("Must call run_load_flow() first")
+            if self.source_data is None:
+                raise RuntimeError("Source data is not available. Ensure run_load_flow() has been called and source data is built.")
 
-        if self._Y_reduced is None:
-            raise RuntimeError("Must call reduce_to_generators() first")
-        if self.gen_data is None:
-            raise RuntimeError("Must call run_load_flow() first")
-        if self.source_data is None:
-            raise RuntimeError("Source data is not available. Ensure run_load_flow() has been called and source data is built.")
-        
-        # Default to all synchronous generators if not specified
-        if outage_generators is None:
-            outage_generators = [
-                name for name, stype in zip(self.source_names, self.source_types) 
-                if stype == 'generator'
-            ]
+            # Default to all synchronous generators if not specified
+            if outage_generators is None:
+                outage_generators = [
+                    name for name, stype in zip(self.source_names, self.source_types)
+                    if stype == 'generator'
+                ]
 
-        all_ratios:     list[npt.NDArray[np.float64]] = []
-        valid_outages:  list[str] = []
-        source_names:   list[str] = []
-        source_types:   list[str] = []
-        
-        for _, gen_name in enumerate(outage_generators):
-            try:
-                ratios_i, source_names, source_types = self.calculate_power_ratios(gen_name, MODE=MODE)
-                
-                if normalize:
-                    ratio_sum = np.sum(ratios_i)
-                    if ratio_sum > 0:
-                        ratios_i = (ratios_i / ratio_sum) * 100
-                
-                all_ratios.append(ratios_i)
-                valid_outages.append(gen_name)
-                
-            except Exception as e:
-                logger.warning(f"Skipping {gen_name}: {e}")
-        
-        ratios_matrix = np.array(all_ratios)
-        
-        self._show()
-        return ratios_matrix, valid_outages, source_names, source_types
+            all_ratios:     list[npt.NDArray[np.float64]] = []
+            valid_outages:  list[str] = []
+            source_names:   list[str] = []
+            source_types:   list[str] = []
+
+            for _, gen_name in enumerate(outage_generators):
+                try:
+                    ratios_i, source_names, source_types = self.calculate_power_ratios(gen_name, MODE=MODE)
+
+                    if normalize:
+                        ratio_sum = np.sum(ratios_i)
+                        if ratio_sum > 0:
+                            ratios_i = (ratios_i / ratio_sum) * 100
+
+                    all_ratios.append(ratios_i)
+                    valid_outages.append(gen_name)
+
+                except Exception as e:
+                    logger.warning(f"Skipping {gen_name}: {e}")
+
+            ratios_matrix = np.array(all_ratios)
+            return ratios_matrix, valid_outages, source_names, source_types
+        finally:
+            self._show()
     
     def get_zone(self, source_name: str) -> str | None:
         """
@@ -399,6 +498,27 @@ class Network:
                     return "None"
         
         logger.warning(f"Zone not found for source: {source_name}")
+        return "None"
+    
+    def get_grid(self, source_name: str) -> str | None:
+        """
+        Get the grid for a source (generator or voltage source).
+        
+        Args:
+            source_name: Name of the source
+            
+        Returns:
+            Zone name string, or None if not found
+        """
+        # Find the source in shunts list
+        for shunt in self.shunts:
+            if shunt.name == source_name:
+                if shunt.grid_code is not None:
+                    return shunt.grid_code
+                else:
+                    return "None"
+        
+        logger.warning(f"Grid not found for source: {source_name}")
         return "None"
     
     def _update_load_admittances_with_lf_voltage(self) -> None:
