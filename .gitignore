@@ -29,8 +29,4 @@ ipython_config.py
 # RMS results files
 rms_results/*
 
-martin_ees_dev/*
-martin_ieee118_dev/*
-martin_IEEE_39/*
-martin_testing/*
-test_martin/*
+local_testing/*
