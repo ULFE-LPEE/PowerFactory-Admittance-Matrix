@@ -14,24 +14,14 @@ Features:
 Quick Start
 -----------
 
-Using the high-level Network class:
+    from src import Network, connect
+    from src.adapters.powerfactory import extract_network, extract_operating_point
+    from src.outage_analysis import SynchroCoefficients
 
-    from src import Network
-    
-    # Initialize network from PowerFactory
-    net = Network(app, base_mva=100.0)
-    
-    # Build matrices and run load flow
-    net.build_matrices()
-    net.run_load_flow()
-    
-    # Reduce to generator nodes
-    DIST_GEN = "SG 11"  # <-- Enter generator name here
-    MODE = 1
-    net.reduce_to_generators(outage_source_name=DIST_GEN, MODE=MODE)
-
-    # Calculate power distribution ratios (returns ratios and matching gen names)
-    ratios, sources_name_order, sources_types = net.calculate_power_ratios(DIST_GEN, MODE)
+    app = connect("PowerFactory project", show=True)
+    network = extract_network(app)
+    operating_point = extract_operating_point(app, network)
+    result = SynchroCoefficients(network, operating_point).calculate("SG 11")
 
 Logging
 -------
@@ -40,19 +30,52 @@ To enable logging:
 
     import logging
     logging.getLogger("src").setLevel(logging.INFO)
-    
+
 For detailed debug output:
 
     logging.getLogger("src").setLevel(logging.DEBUG)
 """
 
 import logging
+from typing import TYPE_CHECKING, Any
 
-from .utils.connection import load_powerfactory
+from .adapters.powerfactory import (
+    BusResult,
+    ExternalGridResult,
+    GeneratorResult,
+    VoltageSourceResult,
+    extract_network,
+    extract_operating_point,
+    get_bus_full_name,
+    get_external_grid_data_from_pf,
+    get_generator_data_from_pf,
+    get_load_flow_results,
+    get_voltage_source_data_from_pf,
+    run_load_flow,
+)
+from .matrices import perform_kron_reduction
+from .network import (
+    Branch,
+    Bus,
+    Element,
+    ExternalGridShunt,
+    GeneratorShunt,
+    LineBranch,
+    LoadShunt,
+    Network,
+    OperatingPoint,
+    PVSystemShunt,
+    Shunt,
+    SourceShunt,
+    SwitchBranch,
+    Transformer3WBranch,
+    TransformerBranch,
+    VoltageSourceShunt,
+)
+from .utils import connect, load_powerfactory
 
-# The existing modules import PowerFactory at module load time. Configure its
-# API path before importing those modules below.
-load_powerfactory()
+if TYPE_CHECKING:
+    from .utils.helpers import import_pfd_file, init_project
 
 __version__ = "0.2.0.dev0"
 
@@ -60,96 +83,57 @@ __version__ = "0.2.0.dev0"
 logging.getLogger(__name__).addHandler(logging.NullHandler())
 __author__ = "LPEE"
 
-# Core classes
-from .core import (
-    Network,
-    BranchElement,
-    LineBranch,
-    SwitchBranch,
-    TransformerBranch,
-    Transformer3WBranch,
-    ShuntElement,
-    LoadShunt,
-    GeneratorShunt,
-    PVSystemShunt,
-    ExternalGridShunt,
-    VoltageSourceShunt,
-)
 
-# Matrix functions
-from .matrices import (
-    MatrixType,
-    build_admittance_matrix,
-    perform_kron_reduction,
-    calculate_power_distribution_ratios,
-    calculate_power_distribution_ratios_from_reduced_column,
-)
+def __getattr__(name: str) -> Any:
+    """Load helpers that require PowerFactory only when requested."""
+    if name in {"init_project", "import_pfd_file"}:
+        from . import utils
 
-# PowerFactory adapter functions (new canonical location)
-from .adapters.powerfactory import (
-    BusResult,
-    GeneratorResult,
-    VoltageSourceResult,
-    ExternalGridResult,
-    get_bus_full_name,
-    get_network_elements,
-    run_load_flow,
-    get_load_flow_results,
-    get_generator_data_from_pf,
-    get_voltage_source_data_from_pf,
-    get_external_grid_data_from_pf,
-)
+        value = getattr(utils, name)
+        globals()[name] = value
+        return value
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
-# Utilities
-from .utils import (
-    connect,
-    init_project,
-    import_pfd_file,
-)
 
 __all__ = [
     # Version
-    '__version__',
-    'load_powerfactory',
-    
-    # Core classes
-    'Network',
-    'BranchElement',
-    'LineBranch',
-    'SwitchBranch',
-    'TransformerBranch',
-    'Transformer3WBranch',
-    'ShuntElement',
-    'LoadShunt',
-    'GeneratorShunt',
-    'PVSystemShunt',
-    'ExternalGridShunt',
-    'VoltageSourceShunt',
-    
+    "__version__",
+    "load_powerfactory",
+    # Standalone network classes
+    "Network",
+    "OperatingPoint",
+    "Element",
+    "Bus",
+    "Branch",
+    "LineBranch",
+    "SwitchBranch",
+    "TransformerBranch",
+    "Transformer3WBranch",
+    "Shunt",
+    "SourceShunt",
+    "LoadShunt",
+    "GeneratorShunt",
+    "PVSystemShunt",
+    "ExternalGridShunt",
+    "VoltageSourceShunt",
     # Matrix types and functions
-    'MatrixType',
-    'build_admittance_matrix',
-    'perform_kron_reduction',
-    'calculate_power_distribution_ratios',
-    'calculate_power_distribution_ratios_from_reduced_column',
-    
+    "perform_kron_reduction",
     # Result classes
-    'BusResult',
-    'GeneratorResult',
-    'VoltageSourceResult',
-    'ExternalGridResult',
-    
+    "BusResult",
+    "GeneratorResult",
+    "VoltageSourceResult",
+    "ExternalGridResult",
     # PowerFactory adapter functions
-    'get_bus_full_name',
-    'get_network_elements',
-    'run_load_flow',
-    'get_load_flow_results',
-    'get_generator_data_from_pf',
-    'get_voltage_source_data_from_pf',
-    'get_external_grid_data_from_pf',
-    
+    "get_bus_full_name",
+    "extract_network",
+    "extract_operating_point",
+    "run_load_flow",
+    "get_load_flow_results",
+    "get_generator_data_from_pf",
+    "get_voltage_source_data_from_pf",
+    "get_external_grid_data_from_pf",
     # Utilities
-    'connect',
-    'init_project',
-    'import_pfd_file',
+    "connect",
+    "init_project",
+    "import_pfd_file",
 ]

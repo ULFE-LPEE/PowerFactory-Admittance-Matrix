@@ -1,15 +1,8 @@
-"""
-Kron reduction and matrix reduction utilities.
-
-This module provides functions for reducing Y-matrices to specific buses,
-including generator internal bus reduction for stability analysis.
-"""
-
-import logging
+"""Source-node extension, linear solves, and Kron reduction."""
 
 import numpy as np
 import numpy.typing as npt
-from ..core.elements import ShuntElement, GeneratorShunt, VoltageSourceShunt, ExternalGridShunt
+from ..network.elements import ExternalGridShunt, GeneratorShunt, VoltageSourceShunt
 
 try:
     import scipy.sparse as sp
@@ -18,12 +11,30 @@ except ImportError:  # pragma: no cover - optional speed-up dependency
     sp = None
     spla = None
 
-logger = logging.getLogger(__name__)
+
+def solve_admittance_system(
+    y: npt.NDArray[np.complex128],
+    rhs: npt.NDArray[np.complex128],
+) -> npt.NDArray[np.complex128]:
+    """Solve Y x = rhs, using SciPy for sufficiently sparse matrices."""
+    if sp is not None and spla is not None and y.size:
+        density = np.count_nonzero(y) / y.size
+        if density <= 0.15:
+            solution = np.asarray(spla.spsolve(sp.csc_matrix(y), rhs), dtype=np.complex128)
+            if rhs.ndim == 2 and solution.ndim == 1:
+                solution = solution.reshape(-1, 1)
+            if not np.isfinite(solution).all():
+                raise np.linalg.LinAlgError("Admittance matrix is singular.")
+            return solution
+
+    return np.linalg.solve(y, rhs)
+
 
 def perform_kron_reduction(
     Y: npt.NDArray[np.complex128],
     indices_to_keep: list[int],
 ) -> npt.NDArray[np.complex128]:
+    """Eliminate all nodes except ``indices_to_keep`` using a Schur complement."""
     n = Y.shape[0]
     indices_to_eliminate = sorted(set(range(n)) - set(indices_to_keep))
 
@@ -35,78 +46,33 @@ def perform_kron_reduction(
     Y_BA = Y[np.ix_(indices_to_eliminate, indices_to_keep)]
     Y_BB = Y[np.ix_(indices_to_eliminate, indices_to_eliminate)]
 
-    if sp is not None and spla is not None and Y_BB.size:
-        density = np.count_nonzero(Y_BB) / Y_BB.size
-        if density <= 0.15:
-            solution = spla.spsolve(sp.csc_matrix(Y_BB), Y_BA)
-            if solution.ndim == 1:
-                solution = solution.reshape(-1, 1)
-            return Y_AA - Y_AB @ solution
+    solution = solve_admittance_system(Y_BB, Y_BA)
+    return Y_AA - Y_AB @ solution
 
-    return Y_AA - Y_AB @ np.linalg.solve(Y_BB, Y_BA)
-
-def perform_kron_reduction_on_busbars(
-    Y: npt.NDArray[np.complex128],
-    busbar_indices: list[int],
-) -> npt.NDArray[np.complex128]:
-    """
-    Apply Kron reduction and retain only specified busbar indices.
-
-    Args:
-        Y: Full admittance matrix
-        busbar_indices: List of busbar indices to retain (indices in Y)
-
-    Returns:
-        Reduced Y-matrix at specified busbar indices
-    """
-    if not busbar_indices:
-        raise ValueError("busbar_indices must not be empty")
-
-    n = Y.shape[0]
-    if any(idx < 0 or idx >= n for idx in busbar_indices):
-        raise IndexError("One or more busbar indices are out of range")
-
-    # Ensure deterministic order and avoid duplicates
-    unique_indices = sorted(set(busbar_indices))
-
-    return perform_kron_reduction(Y, unique_indices)
 
 def extend_matrix_to_generator_internal_nodes(
-    Y_bus: npt.NDArray[np.complex128],  # Stability Y-matrix (generator and load admittances included)
-    bus_idx: dict[str, int],            # Bus name to index mapping
-    sources: list[GeneratorShunt | VoltageSourceShunt | ExternalGridShunt],                                 # List of shunt elements (to extract generators)
+    Y_bus: npt.NDArray[np.complex128],
+    bus_idx: dict[str, int],
+    sources: list[GeneratorShunt | VoltageSourceShunt | ExternalGridShunt],
     base_mva: float = 100.0,
 ) -> npt.NDArray[np.complex128]:
-    # =============== Obtain sources data required for extended matrix (bus indices and admittances) ================
+    """Prepend source-internal nodes to the physical-bus stability matrix.
+
+    ``Y_bus`` already includes each source admittance on its terminal-bus
+    diagonal. The augmented blocks are ``[[K, L], [L.T, Y_bus]]``, where
+    ``K = diag(y_source)`` and ``L[source, bus] = -y_source``. This retains
+    the established source-first ordering and modelling convention.
+    """
     n_sources = len(sources)
     n_bus = len(bus_idx)
-    
-    # Get source data
-    source_bus_indices = [bus_idx[s.bus_name] for s in sources]
-    source_admittances = np.array([s.get_admittance_pu(base_mva) for s in sources], dtype=complex)
+    source_admittances = np.asarray([source.get_admittance_pu(base_mva) for source in sources], dtype=np.complex128)
+    source_to_bus = np.zeros((n_sources, n_bus), dtype=np.complex128)
+    for index, source in enumerate(sources):
+        source_to_bus[index, bus_idx[source.bus_name]] = -source_admittances[index]
 
-    # =============== Now build extended Y-matrix that includes internal generator nodes ================
-    '''
-    Y_extended = | K   L |
-                 | L^T M |
-    K is a submatrix includes connection to the internal nodes of sources
-    M is the original Y_bus including source admittances
-    L is the connection between internal nodes and network buses
-
-    Y_extended = | Y_gen   -Y_gen  |
-                 | -Y_gen   Y_stab'|
-    ''' 
-    # Define submatrices
-    M = Y_bus.copy()
-    K = np.diag(source_admittances)
-    L = np.zeros((n_sources, n_bus), dtype=complex)
-    for i, bus_i in enumerate(source_bus_indices):
-        L[i, bus_i] = -source_admittances[i]
-
-    # Assemble extended matrix from submatrices
-    Y_extended = np.block([
-        [K,     L],
-        [L.T,   M]
-    ])
-
-    return Y_extended
+    return np.block(
+        [
+            [np.diag(source_admittances), source_to_bus],
+            [source_to_bus.T, Y_bus],
+        ]
+    )

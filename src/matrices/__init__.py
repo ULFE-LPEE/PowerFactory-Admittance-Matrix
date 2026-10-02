@@ -1,45 +1,21 @@
-"""
-Admittance matrix building and reduction functions.
-"""
+"""Passive, load-flow, and classical stability admittance matrices."""
 
-from .builder import (
-    MatrixBuildResult,
-    MatrixType,
-    build_admittance_matrix,
-    build_admittance_matrices,
-)
-
-from .reducer import (
-    perform_kron_reduction,
-    extend_matrix_to_generator_internal_nodes,
-)
-
-from .analysis import (
-    calculate_power_distribution_ratios,
-    calculate_power_distribution_ratios_from_reduced_column,
-    calculate_power_distribution_ratios_prefault_postfault,
-)
-
-from .topology import (
-    simplify_topology,
+from .passive import build_load_flow_y_matrix, build_passive_y_matrix
+from .reducer import extend_matrix_to_generator_internal_nodes, perform_kron_reduction
+from .stability import (
+    build_extended_stability_y_matrix,
+    build_internal_voltage_vector,
+    build_stability_bus_y_matrix,
+    build_stability_y_matrix,
 )
 
 __all__ = [
-    # Builder
-    'MatrixBuildResult',
-    'MatrixType',
-    'build_admittance_matrix',
-    'build_admittance_matrices',
-
-    # Reducer
-    'perform_kron_reduction',
-    'extend_matrix_to_generator_internal_nodes',
-
-    # Analysis (Power distribution ratios)
-    'calculate_power_distribution_ratios',
-    'calculate_power_distribution_ratios_from_reduced_column',
-    'calculate_power_distribution_ratios_prefault_postfault',
-
-    # Topology
-    'simplify_topology',
+    "build_passive_y_matrix",
+    "build_load_flow_y_matrix",
+    "build_stability_bus_y_matrix",
+    "build_extended_stability_y_matrix",
+    "build_stability_y_matrix",
+    "build_internal_voltage_vector",
+    "extend_matrix_to_generator_internal_nodes",
+    "perform_kron_reduction",
 ]

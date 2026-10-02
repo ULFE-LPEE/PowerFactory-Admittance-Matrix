@@ -37,6 +37,7 @@ speed = [
 dev = [
     "pytest>=7.0.0",
     "pytest-cov>=4.0.0",
+    "ruff>=0.16.9",
 ]
 notebook = [
     "ipykernel>=6.29.0",
@@ -51,3 +52,20 @@ Repository = "https://github.com/ULFE-LPEE/PowerFactory-Admittance-Matrix"
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["src*"]
+
+[tool.ruff]
+line-length = 120
+indent-width = 4
+target-version = "py312" # in the default example docs
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F"]
+ignore = []
+fixable = ["ALL"]
+unfixable = []
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+line-ending = "auto"
+docstring-code-format = false
