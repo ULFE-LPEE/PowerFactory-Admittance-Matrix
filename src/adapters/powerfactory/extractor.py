@@ -16,6 +16,7 @@ from ...network.elements import (
     LoadModelType,
     LoadShunt,
     PVSystemShunt,
+    StaticGeneratorShunt,
     RatioAsymTapChanger,
     SeriesReactorBranch,
     ShuntFilterShunt,
@@ -99,6 +100,8 @@ def extract_network(
 
         # Extract shunt elements
         for generator in extract_generators(app):
+            network.add_shunt(generator)
+        for generator in extract_static_generators(app, base_mva=base_mva):
             network.add_shunt(generator)
         for load in extract_loads(app):
             network.add_shunt(load)
@@ -974,6 +977,78 @@ def extract_voltage_sources(app: pf.Application) -> list[VoltageSourceShunt]:
         )
 
     return elements
+
+
+def extract_static_generators(app: pf.Application, *, base_mva: float) -> list[StaticGeneratorShunt]:
+    """Extract grid-forming ElmGenstat units with a VSM virtual-impedance block.
+
+    PowerFactory iSimModel values 0 and 2 are treated as voltage-source
+    representations. Other converter models are excluded from the
+    fixed-internal-voltage outage calculation.
+    """
+    elements: list[StaticGeneratorShunt] = []
+    pf_genstats: list[pf.DataObject] = app.GetCalcRelevantObjects("*.ElmGenstat", 0, 0, 0)
+    for genstat in pf_genstats:
+        if genstat.GetAttribute("outserv") == 1 or genstat.IsEnergized() != 1:
+            continue
+
+        name = genstat.GetAttribute("loc_name")
+        sim_model = int(read_optional_value(genstat, "iSimModel", default=0))
+        if sim_model not in (0, 2):
+            logger.info("Static generator %s uses unsupported simulation model %s; skipping", name, sim_model)
+            continue
+
+        virtual_impedance = _virtual_impedance_from_composite(genstat)
+        if virtual_impedance is None:
+            logger.info("Static generator %s has no VSM virtual-impedance block; skipping", name)
+            continue
+
+        cubicle = genstat.GetCubicle(0)
+        if cubicle is None or cubicle.IsClosed() != 1:
+            logger.info("Static generator %s has no closed cubicle; skipping", name)
+            continue
+        bus = cubicle.GetAttribute("cterm")
+        if bus is None or bus.IsEnergized() != 1:
+            logger.info("Static generator %s has no energized terminal; skipping", name)
+            continue
+
+        elements.append(
+            StaticGeneratorShunt(
+                name=name,
+                bus_name=get_bus_full_name(bus),
+                voltage_kv=read_attribute(bus, "uknom", VOLTAGE_TO_KV),
+                virtual_impedance_pu=virtual_impedance,
+                virtual_impedance_base_mva=base_mva,
+            )
+        )
+    return elements
+
+
+def _virtual_impedance_from_composite(genstat: pf.DataObject) -> complex | None:
+    """Return the VSM block's R + jX parameters, if that block is present."""
+    try:
+        composite = genstat.GetAttribute("c_pmod")
+        if composite is None:
+            return None
+        blocks = composite.GetAttribute("pblk")
+        elements = composite.GetAttribute("pelm")
+    except (AttributeError, TypeError):
+        return None
+    if blocks is None or elements is None:
+        return None
+
+    for index, block in enumerate(blocks):
+        if block is None or str(block.GetAttribute("loc_name")).strip().casefold() != "virtual impedance":
+            continue
+        if index >= len(elements) or elements[index] is None:
+            raise ValueError(f"Static generator {genstat.GetAttribute('loc_name')}: virtual-impedance slot is empty.")
+        parameters = elements[index].GetAttribute("params")
+        if parameters is None or len(parameters) < 2:
+            raise ValueError(
+                f"Static generator {genstat.GetAttribute('loc_name')}: virtual-impedance parameters are missing."
+            )
+        return complex(float(parameters[0]), float(parameters[1]))
+    return None
 
 
 def extract_pv_systems(app: pf.Application) -> list[PVSystemShunt]:

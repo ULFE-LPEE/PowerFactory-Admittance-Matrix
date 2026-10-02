@@ -8,7 +8,14 @@ from typing import TYPE_CHECKING
 import numpy as np
 import numpy.typing as npt
 
-from ..network.elements import ExternalGridShunt, GeneratorShunt, PVSystemShunt, VoltageSourceShunt
+from ..network.elements import (
+    ExternalGridShunt,
+    GeneratorShunt,
+    PVSystemShunt,
+    SourceShunt,
+    StaticGeneratorShunt,
+    VoltageSourceShunt,
+)
 from .passive import build_load_flow_y_matrix
 from .reducer import extend_matrix_to_generator_internal_nodes, perform_kron_reduction
 
@@ -73,7 +80,7 @@ def build_internal_voltage_vector(
 def _stability_bus_y(
     network: Network,
     operating_point: OperatingPoint,
-    sources: list[GeneratorShunt | VoltageSourceShunt | ExternalGridShunt],
+    sources: list[SourceShunt],
 ) -> npt.NDArray[np.complex128]:
     """Add only included active-source impedances and all PV impedances."""
     y = build_load_flow_y_matrix(network, operating_point)
@@ -94,7 +101,7 @@ def _stability_bus_y(
 def _extended_stability_y(
     network: Network,
     operating_point: OperatingPoint,
-    sources: list[GeneratorShunt | VoltageSourceShunt | ExternalGridShunt],
+    sources: list[SourceShunt],
 ) -> npt.NDArray[np.complex128]:
     y_bus = _stability_bus_y(network, operating_point, sources)
     bus_idx = {name: index for index, name in enumerate(network.bus_names)}
@@ -110,7 +117,7 @@ def _included_sources(
     network: Network,
     operating_point: OperatingPoint,
     excluded_sources: Collection[str] | None,
-) -> list[GeneratorShunt | VoltageSourceShunt | ExternalGridShunt]:
+) -> list[SourceShunt]:
     if not np.isclose(network.base_mva, operating_point.base_mva):
         raise ValueError("Operating-point and network base MVA must match.")
     sources = network.stability_sources
@@ -119,6 +126,7 @@ def _included_sources(
         raise ValueError("Operating-point source order must match network source order.")
     expected_types = {
         GeneratorShunt: "generator",
+        StaticGeneratorShunt: "static_generator",
         VoltageSourceShunt: "voltage_source",
         ExternalGridShunt: "external_grid",
     }

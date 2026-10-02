@@ -47,7 +47,7 @@ class GeneratorResult:
 
 @dataclass
 class VoltageSourceResult:
-    """Voltage source data with terminal voltage and internal voltage."""
+    """Active voltage-source data, including modeled grid-forming converters."""
 
     name: str
     bus_name: str

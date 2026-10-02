@@ -25,6 +25,7 @@ from .elements import (
     LoadShunt,
     Shunt,
     SourceShunt,
+    StaticGeneratorShunt,
     Transformer3WBranch,
     VoltageSourceShunt,
 )
@@ -85,6 +86,16 @@ class Network:
         return tuple(shunt for shunt in self.shunts if isinstance(shunt, GeneratorShunt))
 
     @property
+    def static_generators(self) -> tuple[StaticGeneratorShunt, ...]:
+        """Return modeled grid-forming static generators."""
+        return tuple(shunt for shunt in self.shunts if isinstance(shunt, StaticGeneratorShunt))
+
+    @property
+    def static_generator_names(self) -> tuple[str, ...]:
+        """Return grid-forming static-generator names."""
+        return tuple(source.name for source in self.static_generators)
+
+    @property
     def load_names(self) -> tuple[str, ...]:
         """Return load names in network order."""
         return tuple(load.name for load in self.loads)
@@ -140,9 +151,9 @@ class Network:
     @property
     def stability_sources(
         self,
-    ) -> tuple[GeneratorShunt | VoltageSourceShunt | ExternalGridShunt, ...]:
+    ) -> tuple[SourceShunt, ...]:
         """Return sources in the PowerFactory adapter's operating-point order."""
-        return self.generators + self.voltage_sources
+        return self.generators + self.static_generators + self.voltage_sources
 
     @property
     def generator_names(self) -> tuple[str, ...]:

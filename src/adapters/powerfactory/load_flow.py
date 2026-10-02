@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import cmath
+import math
 import logging
 from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING
 
 from ...network import Network
-from ...network.elements import ExternalGridShunt, GeneratorShunt, VoltageSourceShunt
+from ...network.elements import ExternalGridShunt, GeneratorShunt, StaticGeneratorShunt, VoltageSourceShunt
 from ...network.operating_point import (
     BusResult,
     ExternalGridResult,
@@ -16,6 +17,7 @@ from ...network.operating_point import (
     OperatingPoint,
     VoltageSourceResult,
 )
+from .extractor import POWER_TO_MVAR, POWER_TO_MW, read_attribute
 from .naming import get_bus_full_name
 
 if TYPE_CHECKING:
@@ -43,6 +45,7 @@ def extract_operating_point(
 
         sources = (
             get_generator_data_from_pf(app, generators, buses, network.base_mva)
+            + get_static_generator_data_from_pf(app, network.static_generators, buses, network.base_mva)
             + get_voltage_source_data_from_pf(app, voltage_sources, buses, network.base_mva)
             + get_external_grid_data_from_pf(app, external_grids, buses, network.base_mva)
         )
@@ -159,6 +162,53 @@ def get_generator_data_from_pf(
         )
 
     logger.debug("Number of generators extracted: %d", len(results))
+    return results
+
+
+def get_static_generator_data_from_pf(
+    app: pf.Application,
+    static_generators: Sequence[StaticGeneratorShunt],
+    lf_results: Mapping[str, BusResult],
+    base_mva: float = 100.0,
+) -> list[VoltageSourceResult]:
+    """Initialize each VSM source behind its virtual impedance.
+
+    On the system base, I = conj(S / V) and E = V + Z I. The resulting E is
+    held fixed during the library's initial post-outage calculation.
+    """
+    results: list[VoltageSourceResult] = []
+    pf_objects = app.GetCalcRelevantObjects("*.ElmGenstat", 0, 0, 0)
+    by_name = {obj.GetAttribute("loc_name"): obj for obj in pf_objects}
+
+    for source in static_generators:
+        bus = lf_results.get(source.bus_name)
+        obj = by_name.get(source.name)
+        if bus is None or obj is None:
+            logger.warning("Missing PowerFactory operating data for static generator %s", source.name)
+            continue
+
+        voltage = bus.voltage_complex
+        if voltage == 0:
+            raise ValueError(f"Static generator {source.name}: terminal voltage is zero.")
+        p_pu = read_attribute(obj, "m:P:bus1", POWER_TO_MW) / base_mva
+        q_pu = read_attribute(obj, "m:Q:bus1", POWER_TO_MVAR) / base_mva
+        z_pu = 1 / source.get_admittance_pu(base_mva)
+        internal_voltage = voltage + z_pu * (complex(p_pu, q_pu).conjugate() / voltage.conjugate())
+
+        results.append(
+            VoltageSourceResult(
+                name=source.name,
+                bus_name=source.bus_name,
+                terminal_voltage=voltage,
+                impedance_pu=z_pu,
+                p_pu=p_pu,
+                q_pu=q_pu,
+                internal_voltage=internal_voltage,
+                internal_voltage_mag=abs(internal_voltage),
+                internal_voltage_angle=math.degrees(cmath.phase(internal_voltage)),
+                source_type="static_generator",
+            )
+        )
     return results
 
 
