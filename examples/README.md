@@ -9,16 +9,18 @@ This folder contains Jupyter notebooks demonstrating how to use the `src` librar
 
 ## Network Options
 
-When creating a `Network` object, you can use the following options:
+Connect to an existing PowerFactory project and extract a standalone network:
 
 ```python
-from src import Network
+from src import connect
+from src.adapters.powerfactory import extract_network, extract_operating_point
 
-# Basic usage
-net = Network(app, base_mva=100.0)
+app = connect("Radial System", show=True)
+network = extract_network(app, base_mva=100.0)
+operating_point = extract_operating_point(app, network)
 
-# With topology simplification (merges buses connected by closed switches)
-net = Network(app, base_mva=100.0, simplify_topology=True)
+# Optional topology simplification merges buses connected by closed switches.
+network = extract_network(app, base_mva=100.0, merge_closed_switches=True)
 ```
 
 ## Notebooks
@@ -28,18 +30,18 @@ net = Network(app, base_mva=100.0, simplify_topology=True)
 Demonstrates the basic workflow:
 
 - Connect to PowerFactory
-- Import a PFD file and activate project (or manually open desired network in PF)
+- Connect to an existing PowerFactory project
 - Extract network and build admittance matrix
 - View load flow Y-matrix as DataFrame
-- Run load flow calculation
+- Read a solved operating point
 - Display load flow results (voltage magnitude and angle)
 
 ### 02_stability_admittance_matrix_with_power_distribution.ipynb
 
 Demonstrates stability analysis with power distribution ratios:
 
-- Connect to PowerFactory and import PFD file
-- Build network and run load flow
-- Reduce admittance matrix to generator internal buses (Kron reduction)
-- Calculate power distribution ratios for a generator trip scenario
+- Connect to an existing PowerFactory project
+- Build the reduced stability matrix from the standalone network
+- Select one of the three outage formulation classes
+- Calculate source response ratios for a generator trip scenario
 - Bar chart visualization of power redistribution

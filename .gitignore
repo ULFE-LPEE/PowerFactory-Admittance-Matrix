@@ -21,6 +21,7 @@ ipython_config.py
 .env
 .venv
 .venv-notebook
+.ruff_cache
 
 # VS Code
 .vscode/
@@ -30,3 +31,4 @@ ipython_config.py
 rms_results/*
 
 local_testing/*
+NEW_TESTING/*

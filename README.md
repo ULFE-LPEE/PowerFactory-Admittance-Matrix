@@ -6,6 +6,8 @@ A Python library for extracting admittance matrices from DIgSILENT PowerFactory 
 
 ⚠️ **This library is under active development.**
 
+**PowerFactory compatibility:** This library has been tested with DIgSILENT PowerFactory 2024 SP4A only. Other PowerFactory versions have not yet been validated.
+
 The library currently supports extraction of multiple PowerFactory network elements, however some components require further refinement—particularly the proper handling of voltage tap settings for 2-winding and 3-winding transformers.
 
 If you encounter any issues or would like to request new functionality, please [open an issue](https://github.com/ULFE-LPEE/PowerFactory-Admittance-Matrix/issues) on GitHub or contact the developer directly at martin.valencic@fe.uni-lj.si.
@@ -13,7 +15,7 @@ If you encounter any issues or would like to request new functionality, please [
 ## Features
 
 - Extract load flow and stability admittance matrices from PowerFactory
-- Kron reduction to generator internal buses
+- Kron reduction to active-source internal nodes
 - Power distribution ratio calculations for generator trip scenarios
 
 ## Installation
@@ -50,7 +52,7 @@ uv run --extra speed python -c "import src; print(src.__version__)"
 `uv sync` installs the library in editable mode, so changes to its Python source
 are available on the next Python process. Commit `uv.lock` with dependency
 updates, and use `uv sync --locked` when reproducing a recorded environment.
-The `speed` extra installs SciPy for the optional sparse Kron-reduction path;
+The `speed` extra installs SciPy for sparse Kron reduction and branch-flow solves;
 without it, the library uses NumPy's dense solver. Development tools are in
 the `dev` dependency group, which uv includes by default.
 For the example notebook, also install the `notebook` group and select this
@@ -60,56 +62,103 @@ project's uv environment as its Jupyter kernel.
 uv sync --extra speed --group notebook
 ```
 
-The importable package is now `src`, containing `core`, `matrices`, `adapters`,
-and `utils`. This is a breaking import change; existing `admittance_matrix`
-imports need to be updated in consuming projects.
+The importable package is now `src`, containing `network`, `matrices`,
+`outage_analysis`, `adapters`, and `utils`. `from src import Network` resolves
+to the standalone model. Existing `admittance_matrix` imports need to be
+updated in consuming projects.
 
 ## Quick Start
 
 ```python
 from src import Network, connect
+from src.adapters.powerfactory import extract_network, extract_operating_point
 
-import pandas as pd
-
-# Connect to PowerFactory
 app = connect("Lokalizacija\\11_bus_radial_system", show=True)
+network: Network = extract_network(app, base_mva=100.0)
+operating_point = extract_operating_point(app, network)
 
-# Initialize network and build matrices
-net = Network(app, base_mva=100.0)
-net.build_matrices()
-
-# Access the matrices
-Y_loadflow = net.Y_lf_matrix       # Load flow admittance matrix
-Y_stability = net.Y_stab_matrix    # Stability admittance matrix (with generator reactances)
-
-print(f"Load flow Y-matrix shape: {Y_loadflow.shape}")
-print(f"Stability Y-matrix shape: {Y_stability.shape}")
-
-# Display with bus names as index and columns
-pd.DataFrame(Y_loadflow, index=net.bus_names, columns=net.bus_names)
+passive_y = network.get_passive_y_matrix()
+stability_y = network.get_stability_y_matrix(operating_point)
+print(passive_y.shape, stability_y.shape)
 ```
 
+`get_passive_y_matrix()` contains branches, transformers, and passive filters.
+`get_load_flow_y_matrix(operating_point)` also includes constant-impedance loads;
+the two matrices therefore need not be identical. The augmented stability
+matrix keeps the library's source-internal-first node order.
+
 ## Module Structure
+
+The new `src.network.Network` is a PowerFactory-independent model. It accepts
+the existing branch, shunt, and three-winding-transformer elements and builds
+the existing load-flow and stability matrices. The adapter can construct it
+from an active PowerFactory application:
+
+```python
+from src.adapters.powerfactory import extract_network
+
+network = extract_network(app, base_mva=100.0)
+load_flow_y = network.get_load_flow_y_matrix()
+passive_y = network.get_passive_y_matrix()
+print(network.generator_names, network.line_names)
+```
+
+The element hierarchy is `Element` (name and optional ID), then `Bus`,
+two-terminal `Branch`, and one-terminal `Shunt`. Equipment types such as
+`LineBranch` and `GeneratorShunt` implement their own electrical models.
+`Network.branches` and `Network.shunts` are the stored equipment collections;
+`Network.lines`, `Network.generators`, `Network.loads`, and
+`Network.voltage_sources` are read-only views of them. Add equipment through
+the `add_branch()` and `add_shunt()` methods so connected buses are registered too.
+
+For a solved operating point, choose one of the three outage formulations:
+
+```python
+from src.adapters.powerfactory import extract_operating_point
+from src.outage_analysis import AngleUpdateFormulation, ReducedMatrixFormulation, SynchroCoefficients
+
+operating_point = extract_operating_point(app, network)
+reduced_y = network.get_stability_y_matrix(operating_point)
+internal_voltages = network.get_internal_voltage_vector(operating_point)
+for formulation in (SynchroCoefficients, AngleUpdateFormulation, ReducedMatrixFormulation):
+    ratios_by_source = formulation(network, operating_point).calculate("SG 12")
+    print(formulation.__name__, ratios_by_source)
+```
+
+All three return a dictionary of dimensionless ratios in
+`operating_point.source_names` order, including zero for the tripped source.
+`SynchroCoefficients` is the original Mode 0 (prefault coefficients),
+`AngleUpdateFormulation` is Mode 1 (outaged admittance and angle update), and
+`ReducedMatrixFormulation` is Mode 2 (prefault/postfault internal power change).
+The notebook selects Mode 1 by default. None of these ratios is an absolute
+active-power change in MW. Mode 2 also exposes modeled initial changes through
+`power_changes_mw(outaged_source)`.
 
 ```
 src/
 ├── adapters/
 │   └── powerfactory/     # PowerFactory-specific code
-│       ├── extractor.py  # Network element extraction
-│       ├── loadflow.py   # Load flow execution & results
+│       ├── extractor.py  # Equipment extraction and unit-aware attributes
+│       ├── load_flow.py  # Load-flow execution and operating-point extraction
 │       ├── naming.py     # Bus naming utilities
-│       └── results.py    # Result dataclasses
-├── core/
-│   ├── elements.py       # BranchElement, ShuntElement classes
-│   ├── network.py        # High-level Network wrapper
-│   └── reductionEngine.py # Network reduction engine
+├── network/              # PowerFactory-independent electrical model
+│   ├── elements.py       # Branches, transformers, shunts, and tap changers
+│   ├── network.py        # Standalone Network class
+│   ├── operating_point.py # Solved bus and source data
+│   └── topology.py       # Closed-switch bus merging
 ├── matrices/
-│   ├── builder.py        # build_admittance_matrix()
-│   ├── reducer.py        # Kron reduction functions
-│   ├── analysis.py       # Power distribution ratio calculations
-│   └── topology.py       # Used for network simplification
+│   ├── passive.py        # Passive and load-flow physical-bus matrices
+│   ├── stability.py      # Stability bus, extended, and reduced matrices
+│   └── reducer.py        # Source-node extension and Kron reduction
+├── outage_analysis/
+│   ├── synchronizing.py  # Mode 0: SynchroCoefficients
+│   ├── angle_update.py   # Mode 1: AngleUpdateFormulation
+│   ├── reduced_matrix.py # Mode 2: ReducedMatrixFormulation
+│   ├── branch_flows.py   # Directional branch active-power changes
+│   └── __init__.py       # Public formulation classes
 └── utils/
     ├── connection.py     # PowerFactory API path, import, and project connection
+    ├── rms_simulation.py # Dynamic outage simulation and result extraction
     └── helpers.py        # Utility functions
 ```
 

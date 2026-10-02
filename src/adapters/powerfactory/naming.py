@@ -1,37 +1,26 @@
-"""
-PowerFactory bus naming utilities.
+"""Stable names for PowerFactory terminals."""
 
-This module provides functions to generate consistent bus names
-from PowerFactory terminal objects.
-"""
+from __future__ import annotations
 
-def get_bus_full_name(terminal) -> str:
-    """
-    Get the full bus name including substation and bay context when available.
+from typing import TYPE_CHECKING
 
-    Formats:
-        - "SubstationName_BusName" when the terminal is not in a bay.
-        - "Sub_SubstationName_Bay_BayName_Term_TerminalName" when the terminal
-          is within a bay (ElmBay).
-        - "BusName" when no substation can be resolved.
+if TYPE_CHECKING:
+    import powerfactory as pf
 
-    Args:
-        terminal: PowerFactory terminal object (ElmTerm).
 
-    Returns:
-        Full bus name with substation and bay prefixes where applicable.
-    """
+def get_bus_full_name(terminal: pf.DataObject) -> str:
+    """Include substation and bay context when PowerFactory provides it."""
+    terminal_name = terminal.GetAttribute("loc_name")
     try:
-        # Get substation name
-        substatName = terminal.GetAttribute("cpSubstat").loc_name
-        parentClassName = terminal.GetParent().GetClassName()
+        substation = terminal.GetAttribute("cpSubstat")
+        if substation is None:
+            return terminal_name
 
-        # If terminal is in a bay, include bay name
-        if (parentClassName == 'ElmBay'):
-            return f"Sub_{substatName}_Bay_{ terminal.GetParent().loc_name}_Term_{terminal.loc_name}"
-        # Else just substation + terminal
-        return f"{substatName}_{terminal.loc_name}"
-    
+        substation_name = substation.GetAttribute("loc_name")
+        parent = terminal.GetParent()
+        if parent.GetClassName() == "ElmBay":
+            bay_name = parent.GetAttribute("loc_name")
+            return f"Sub_{substation_name}_Bay_{bay_name}_Term_{terminal_name}"
+        return f"{substation_name}_{terminal_name}"
     except Exception:
-        # If any issue occurs (e.g., no substation), return just terminal name
-        return terminal.loc_name
+        return terminal_name
