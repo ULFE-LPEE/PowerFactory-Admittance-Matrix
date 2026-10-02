@@ -1032,6 +1032,28 @@ class VoltageSourceShunt(SourceShunt):
 
 
 @dataclass
+class StaticGeneratorShunt(SourceShunt):
+    """Grid-forming ElmGenstat behind its VSM block's virtual impedance.
+
+    Model the initial response with a fixed internal voltage and
+    Z_ohm = Z_virtual,pu * V_terminal,nom^2 / S_virtual. Converter short-circuit
+    impedance (uk/Pcu) is excluded by this simplified modeling assumption.
+    """
+
+    virtual_impedance_pu: complex = field(kw_only=True)
+    virtual_impedance_base_mva: float = field(kw_only=True)
+
+    def __post_init__(self) -> None:
+        if self.voltage_kv <= 0 or self.virtual_impedance_base_mva <= 0:
+            raise ValueError(f"Static generator {self.name}: voltage and virtual-impedance MVA base must be positive.")
+        if self.virtual_impedance_pu == 0:
+            raise ValueError(f"Static generator {self.name}: virtual impedance cannot be zero.")
+
+        z_ohm = self.virtual_impedance_pu * self.voltage_kv**2 / self.virtual_impedance_base_mva
+        self.admittance = 1 / z_ohm
+
+
+@dataclass
 class PVSystemShunt(Shunt):
     """
     Photovoltaic system element (ElmPvsys).
@@ -1225,6 +1247,7 @@ __all__ = [
     "GeneratorShunt",
     "ExternalGridShunt",
     "VoltageSourceShunt",
+    "StaticGeneratorShunt",
     "PVSystemShunt",
     "ShuntFilterType",
     "ShuntFilterShunt",

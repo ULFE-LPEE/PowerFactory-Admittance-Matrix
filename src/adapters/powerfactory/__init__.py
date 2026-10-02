@@ -8,6 +8,7 @@ from .load_flow import (
     extract_operating_point,
     get_external_grid_data_from_pf,
     get_generator_data_from_pf,
+    get_static_generator_data_from_pf,
     get_load_flow_results,
     get_voltage_source_data_from_pf,
     run_load_flow,
@@ -36,6 +37,7 @@ __all__ = [
     "run_load_flow",
     "get_load_flow_results",
     "get_generator_data_from_pf",
+    "get_static_generator_data_from_pf",
     "get_voltage_source_data_from_pf",
     "get_external_grid_data_from_pf",
 ]

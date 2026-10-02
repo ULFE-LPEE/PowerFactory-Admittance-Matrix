@@ -2,7 +2,7 @@
 
 import numpy as np
 import numpy.typing as npt
-from ..network.elements import ExternalGridShunt, GeneratorShunt, VoltageSourceShunt
+from ..network.elements import SourceShunt
 
 try:
     import scipy.sparse as sp
@@ -53,7 +53,7 @@ def perform_kron_reduction(
 def extend_matrix_to_generator_internal_nodes(
     Y_bus: npt.NDArray[np.complex128],
     bus_idx: dict[str, int],
-    sources: list[GeneratorShunt | VoltageSourceShunt | ExternalGridShunt],
+    sources: list[SourceShunt],
     base_mva: float = 100.0,
 ) -> npt.NDArray[np.complex128]:
     """Prepend source-internal nodes to the physical-bus stability matrix.

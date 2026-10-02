@@ -162,6 +162,34 @@ src/
     └── helpers.py        # Utility functions
 ```
 
+## Grid-forming static generators
+
+The PowerFactory adapter includes an energized ElmGenstat as a responding
+source when its simulation model uses the voltage-source representation
+(iSimModel 0 or 2) and its composite model has a slot named "Virtual impedance".
+Other ElmGenstat units are skipped by this initial-response model.
+
+The simplified VSM model uses only the composite block's virtual impedance;
+converter short-circuit parameters uk and Pcu are not added. **The block
+parameters are currently assumed to be per unit on the network MVA base and
+the terminal nominal-voltage base.** Verify that assumption for each
+PowerFactory composite model before interpreting numerical results. The source
+internal voltage is initialized from the solved load-flow P, Q, and bus voltage
+through E = V + Z conj(S / V).
+
+Modeled static generators appear in Network.static_generator_names and
+Network.stability_source_names and respond to synchronous-generator outages
+in all three formulations. The calculate_all() methods still enumerate
+synchronous-generator outages; an individual static-generator outage can be
+calculated by name. These formulations hold surviving internal voltages fixed
+and do not reproduce VSM controller dynamics. Compare their initial response
+with RMS simulation before drawing conclusions.
+
+For comparisons, use network.generator_names for the tripped synchronous
+machines and network.stability_source_names for responding sources,
+including the modeled VSM units. RMS monitors must also record ElmGenstat
+active power if their responses are to appear in comparison plots.
+
 ## Logging
 
 By default, the library produces no console output. To enable logging:
